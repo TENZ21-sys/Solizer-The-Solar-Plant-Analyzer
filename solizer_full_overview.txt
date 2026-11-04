@@ -1,0 +1,194 @@
+================================================================================
+SOLIZE - SOLAR PLANT PERFORMANCE ANALYSIS & INTELLIGENCE PLATFORM
+FULL SYSTEM OVERVIEW & MATHEMATICAL EQUATIONS
+================================================================================
+
+1. EXECUTIVE SUMMARY
+--------------------
+Solize (Solar Plant Analyzer) is a comprehensive, standalone desktop software 
+application designed for solar power plant operators, performance engineers, 
+and renewable energy asset managers. The platform bridges the gap between raw, 
+complex industrial operational logs and high-level performance intelligence.
+
+By combining an intuitive dark-themed user interface (React & TypeScript) with 
+a high-performance backend analytics engine (FastAPI & Pandas), Solize automates 
+data ingestion, key performance indicator (KPI) calculations, anomaly detection, 
+and automated report generation in PDF and Microsoft Word formats—all within a 
+secure, offline-first desktop environment.
+
+
+2. SYSTEM PURPOSE & THE PROBLEM IT SOLVES
+------------------------------------------
+Problem Context:
+Modern utility-scale and commercial solar power plants generate vast amounts 
+of data daily across inverters, weather stations, and meters. Typically, this 
+operational data is exported as multi-sheet, unstandardized Excel workbooks 
+containing thousands of rows, missing entries, and data anomalies. Manually 
+compiling, cleaning, and calculating metrics from these logs is extremely 
+time-consuming, prone to human error, and delays operational decision-making.
+
+System Purpose:
+Solize was built to completely automate and streamline this workflow. Its 
+primary objectives are:
+- Instant Data Ingestion: Parse and clean multi-sheet operational Excel files 
+  in seconds regardless of row count or missing data fields.
+- Automated KPI Calculation: Compute standard solar metrics (Performance Ratio, 
+  Specific Yield, Capacity Utilization Factor, Degradation Rates) with mathematical precision.
+- Actionable Diagnostic Insights: Pinpoint underperforming inverters, 
+  excessive soiling/shading losses, and equipment degradation trends.
+- Automated Reporting: Eliminate manual report creation by generating formatted 
+  executive PDF and Word reports with a single click.
+- Offline Data Security: Ensure sensitive plant data stays 100% local on the 
+  user's machine without relying on external cloud connections or subscriptions.
+
+
+3. RELEVANCE TO SOLAR POWER PLANT OPERATIONS
+--------------------------------------------
+Solize addresses core operational and engineering challenges in solar asset management:
+
+A. Performance Ratio (PR %) Calculation & Tracking:
+   PR compares actual plant energy generation against theoretical output under 
+   real irradiance and temperature conditions. Solize computes daily, monthly, 
+   and annual PR to verify if the plant meets guaranteed performance levels.
+
+B. Inverter-Level Health & Conversion Monitoring:
+   Solar inverters convert DC power from PV strings to grid-ready AC power. 
+   Solize parses individual inverter data to detect conversion efficiency drops, 
+   thermal derating, and clipping losses early, preventing costly downtime.
+
+C. Solar PV Panel Degradation Modeling:
+   Solar modules degrade naturally by 0.5% to 0.8% per year. Solize tracks 
+   historical multi-year trend lines to calculate real annual degradation rates, 
+   helping asset managers enforce manufacturer warranty claims.
+
+D. Energy Loss Breakdown & Diagnostics:
+   Solize categorizes losses (soiling, temperature losses, inverter outages, 
+   grid curtailment), enabling Operations & Maintenance (O&M) teams to schedule 
+   targeted panel cleaning or equipment maintenance.
+
+E. Financial & Capacity Utilization Analysis:
+   By computing Specific Yield (kWh/kWp) and Capacity Utilization Factor (CUF %), 
+   Solize gives investors and asset owners clear visibility into financial returns 
+   and plant utilization.
+
+
+4. MATHEMATICAL EQUATIONS & FORMULAS USED IN SOLIZE
+---------------------------------------------------
+
+A. Performance Ratio (PR %)
+   The primary metric measuring overall solar plant efficiency:
+
+   PR (%) = [ Actual Generation (kWh) / Theoretical Max Generation (kWh) ] × 100%
+
+   Detailed Formula implemented in Solize:
+   PR (%) = [ Generation (kWh) / ( Σ Irradiance (W/m²) × Panel Area (m²) × Module Efficiency × Running Hours / 1000 ) ] × 100%
+
+   Where:
+   - Σ Irradiance = Sum of daily solar irradiance values (W/m² or Wh/m²)
+   - Panel Area = Total surface area of installed PV modules (m²)
+   - Module Efficiency = PV panel efficiency expressed as a fraction (e.g., 0.21 for 21%)
+   - Running Hours = Assumed daily peak sun hours / operating hours (e.g., 5.5 hrs/day)
+   - Division by 1000 converts Wh to kWh.
+
+
+B. Capacity Utilization Factor (CUF %)
+   Measures real energy generation output against continuous full-capacity output over a time period:
+
+   CUF (%) = [ Total Generation (MWh) / ( Installed AC Capacity (MW) × Total Hours ) ] × 100%
+
+   Where:
+   - Total Hours = Total Days in period × 24 hours/day
+
+
+C. Specific Yield (kWh/kWp)
+   Measures energy produced per installed DC peak kilowatt capacity:
+
+   Specific Yield = Total Generation (kWh) / Installed DC Capacity (kWp)
+
+   Where:
+   - Installed DC Capacity (kWp) = Installed DC Capacity (MW) × 1000
+
+
+D. Plant Availability (%)
+   Measures the operational uptime ratio of the plant:
+
+   Availability (%) = [ Actual Generation (kWh) / Total Possible Generation (kWh) ] × 100%
+
+
+E. Inverter-Level Performance Ratio (PR_inv %)
+   Evaluates individual inverter efficiency across assigned sub-array panel areas:
+
+   PR_inv (%) = [ Inverter Generation (kWh) / ( Σ Irradiance × Inverter Panel Area × Module Efficiency × Running Hours / 1000 ) ] × 100%
+
+   Where:
+   - Inverter Panel Area (m²) = Total Plant Panel Area (m²) / Total Number of Inverters
+
+
+F. Annual Degradation Rate (% / year)
+   Calculates observed module performance degradation over time using Ordinary Least Squares (OLS) Linear Regression on monthly PR trends:
+
+   Slope (m) = Σ [ (x_i - x_mean) × (y_i - y_mean) ] / Σ [ (x_i - x_mean)² ]
+
+   Where:
+   - x_i = Month index (0, 1, 2, ..., N-1)
+   - y_i = Monthly Performance Ratio (%)
+   - Monthly Decline Rate = Slope (m)
+   - Annual Degradation Rate (%/year) = | Slope (m) × 12 |
+
+
+G. Expected Cumulative Degradation (%)
+   Predicts baseline degradation over elapsed plant lifetime:
+
+   Expected Degradation (%) = Plant Age (Years) × Configured Annual Degradation Rate (%/year)
+
+   Where:
+   - Plant Age (Years) = (Study End Date - Commission Date in days) / 365.25
+
+
+5. KEY SYSTEM MODULES & FEATURES
+---------------------------------
+- Solar Plant Profile Management: Create, edit, and manage multiple solar plant 
+  profiles with custom technical specifications (DC/AC capacity, inverter counts, 
+  tilt angles, module efficiency).
+- Robust Excel Ingestion Engine: Drag-and-drop import of daily/monthly inverter 
+  sheets. Auto-filters NaN values, missing dates, and formatting discrepancies.
+- Interactive Analytics Dashboard: Rich dark-mode dashboard displaying generation 
+  timelines, PR trends, inverter rank comparisons, and weather correlation charts.
+- Alert & Anomaly Engine: Automatic detection of underperforming inverters, 
+  PR drops below thresholds, and data gaps.
+- Executive Report Generator: Instant export of customizable performance reports 
+  (PDF & DOCX) featuring plant summary tables, loss breakdown charts, and O&M 
+  recommendations.
+
+
+6. TECHNICAL ARCHITECTURE & DEPLOYMENT
+--------------------------------------
+Solize utilizes a hybrid web-to-desktop architecture:
+
+- Frontend Layer: React (Vite) + TypeScript + Recharts + Vanilla CSS Dark Theme.
+- Backend Layer: Python 3.9 + FastAPI (Asynchronous REST API) + SQLAlchemy 2.0 ORM.
+- Analytics & Computing: Pandas + NumPy + Matplotlib.
+- Document Compilation: ReportLab (PDF) + python-docx (Microsoft Word).
+- Database: Embedded SQLite stored locally under %APPDATA%\Solizer\data\solizer.db.
+- Desktop GUI Wrapper: PyWebView (Edge Chromium / WebView2 native OS window 
+  wrapper at 1280x720 resolution).
+- Single Executable Packaging: PyInstaller (bundles backend, frontend dist, 
+  and runtime into solizer-backend.exe).
+- Distribution: Inno Setup compiler generating a standalone Windows Installer 
+  (Solizer_Setup.exe).
+
+
+7. SUMMARY OF USER BENEFITS & VALUE
+------------------------------------
+- 99% Time Savings: Reduces monthly report preparation from several hours of 
+  manual spreadsheet work to less than 5 seconds.
+- Enhanced Plant Reliability: Early detection of inverter faults minimizes 
+  uncaptured solar energy.
+- Zero IT Dependencies: Runs out-of-the-box on standard Windows PCs without 
+  requiring Python, Node.js, or database server installations.
+- 100% Data Privacy: Keeps sensitive financial and operational performance 
+  data local and confidential.
+
+================================================================================
+END OF FULL SYSTEM OVERVIEW & MATHEMATICAL EQUATIONS
+================================================================================

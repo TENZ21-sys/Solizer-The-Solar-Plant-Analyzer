@@ -1,0 +1,32 @@
+# SoliZer Intelligence Platform - Backend Dependencies
+# FastAPI & Server
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+python-multipart==0.0.9
+
+# Database
+sqlalchemy==2.0.32
+alembic==1.13.2
+
+# Data Processing
+pandas==2.0.3
+openpyxl==3.1.5
+numpy==1.24.4
+
+# Reporting
+python-docx==1.1.2
+reportlab==4.2.2
+
+# Validation & Serialization
+pydantic==2.8.0
+pydantic-settings==2.4.0
+
+# CORS
+starlette==0.38.2
+
+# Utilities
+python-dateutil==2.9.0
+
+# Desktop Wrapper
+pywebview>=5.1
+
