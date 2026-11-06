@@ -16,9 +16,9 @@
 
 ### 1. IEC 61724 Standard KPI Engine
 * **Performance Ratio (PR)**: Evaluates overall plant efficiency against theoretical irradiation potential.
-* **Temperature-Corrected PR ($PR_{STC}$)**: Implements temperature coefficients ($\gamma$) to normalize seasonal cell temperature effects to Standard Test Conditions ($25^\circ\text{C}$).
+* **Temperature-Corrected PR (PR_STC)**: Implements temperature coefficients ($\gamma$) to normalize seasonal cell temperature effects to Standard Test Conditions ($25^\circ\text{C}$).
 * **Capacity Utilization Factor (CUF)**: Normalized metric evaluating actual MWh produced relative to rated AC capacity over 24-hour periods.
-* **Specific Yield ($Y_f$)**: Generation normalized by installed DC capacity (kWh/kWp/day).
+* **Specific Yield (Y_f)**: Generation normalized by installed DC capacity (kWh/kWp/day).
 * **Plant & Inverter Availability**: High-accuracy uptime and operational availability metrics.
 
 ### 2. Longitudinal Degradation Assessment
@@ -28,7 +28,11 @@
 ### 3. Financial Revenue & Loss Intelligence
 * **Loss Categorization**: Quantifies energy lost to **Grid Failures**, **Grid Curtailment**, **Transmission Losses**, and **Machine/Inverter Downtime**.
 * **Financial Monetization**: Calculates lost revenue using customizable feed-in tariff (FIT) rates:
-  $$\text{Revenue Lost} = \text{Lost Energy (kWh)} \times \text{Tariff Rate}$$
+
+$$
+\text{Revenue Lost} = \text{Lost Energy (kWh)} \times \text{Tariff Rate}
+$$
+
 * Realized revenue, lost revenue, and gross potential revenue tracking on the live dashboard.
 
 ### 4. Multi-Format Ingestion & Operator Logging
@@ -50,20 +54,37 @@
 ## 📐 Engineering Equations & Standards
 
 ### 1. Performance Ratio (PR)
-$$\text{PR} = \frac{\text{Actual Generation (kWh)}}{\frac{\text{Irradiation (Wh/m}^2\text{)} \times \text{Total Area (m}^2\text{)} \times \eta_{\text{module}} \times \text{Sun Hours}}{1000}} \times 100$$
 
-### 2. IEC 61724 Temperature-Corrected PR ($PR_{STC}$)
-$$\text{PR}_{STC} = \frac{\text{PR}}{1 + \gamma \times (T_{\text{cell}} - 25^\circ\text{C})}$$
+$$
+\text{PR} = \frac{\text{Actual Generation (kWh)}}{\frac{\text{Irradiation (Wh/m}^2\text{)} \times \text{Total Area (m}^2\text{)} \times \eta_{\text{module}} \times \text{Sun Hours}}{1000}} \times 100
+$$
+
+### 2. IEC 61724 Temperature-Corrected PR (PR_STC)
+
+$$
+\text{PR}_{\text{STC}} = \frac{\text{PR}}{1 + \gamma \times (T_{\text{cell}} - 25^\circ\text{C})}
+$$
+
 *where $\gamma \approx -0.004 / ^\circ\text{C}$ (temperature coefficient of power).*
 
 ### 3. Capacity Utilization Factor (CUF)
-$$\text{CUF} = \frac{\text{Generation (MWh)}}{\text{Installed AC Capacity (MW)} \times \text{Total Hours}} \times 100$$
 
-### 4. Specific Yield ($Y_f$)
-$$Y_f = \frac{\text{Total Generation (kWh)}}{\text{Installed DC Capacity (kWp)}}$$
+$$
+\text{CUF} = \frac{\text{Generation (MWh)}}{\text{Installed AC Capacity (MW)} \times \text{Total Hours}} \times 100
+$$
+
+### 4. Specific Yield (Y_f)
+
+$$
+Y_f = \frac{\text{Total Generation (kWh)}}{\text{Installed DC Capacity (kWp)}}
+$$
 
 ### 5. Annual Degradation Rate (OLS)
-$$\text{Degradation Rate (\%/year)} = m \times 12$$
+
+$$
+\text{Degradation Rate (\%/year)} = m \times 12
+$$
+
 *where $m$ is the slope of the linear regression line on monthly average PR values over time.*
 
 ---
