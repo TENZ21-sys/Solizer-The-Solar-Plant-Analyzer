@@ -85,7 +85,7 @@ $$
 \text{Degradation Rate (\%/year)} = m \times 12
 $$
 
-*where $m$ is the slope of the linear regression line on monthly average PR values over time.*
+*where m is the slope of the linear regression line on monthly average PR values over time.*
 
 ---
 
