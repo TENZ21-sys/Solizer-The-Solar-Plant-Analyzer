@@ -65,7 +65,7 @@ $$
 \text{PR}_{\text{STC}} = \frac{\text{PR}}{1 + \gamma \times (T_{\text{cell}} - 25^\circ\text{C})}
 $$
 
-*where $\gamma \approx -0.004 / ^\circ\text{C}$ (temperature coefficient of power).*
+*where* $\gamma \approx -0.004 / ^\circ\text{C}$ (temperature coefficient of power).
 
 ### 3. Capacity Utilization Factor (CUF)
 
