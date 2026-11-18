@@ -163,6 +163,23 @@ export const getReports = (plantId: number): Promise<Report[]> =>
 export const deleteReport = (plantId: number, reportId: number): Promise<{ success: boolean; message: string }> =>
   api.delete(`/plants/${plantId}/reports/${reportId}`).then(unwrap);
 
+export const downloadReportFile = async (plantId: number, reportId: number, filename: string): Promise<void> => {
+  const response = await api.get(`/plants/${plantId}/reports/${reportId}/download`, {
+    responseType: 'blob',
+  });
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  link.parentNode?.removeChild(link);
+  window.URL.revokeObjectURL(url);
+};
+
+export const openReport = (plantId: number, reportId: number): Promise<{ success: boolean; message: string }> =>
+  api.post(`/plants/${plantId}/reports/${reportId}/open`).then(unwrap);
+
 // ─── Daily Manual Entry & Management ────────────────────────────────────────
 export const addDailyRecord = (
   plantId: number,

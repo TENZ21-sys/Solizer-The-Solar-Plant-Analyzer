@@ -22,8 +22,17 @@ import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import CloudUploadRoundedIcon from '@mui/icons-material/CloudUploadRounded';
 import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
+import LaunchRoundedIcon from '@mui/icons-material/LaunchRounded';
 import { usePlant } from '../context/PlantContext';
-import { getReports, generateReport, uploadCompanyLogo, getCompanyLogoUrl, deleteReport } from '../services/api';
+import {
+  getReports,
+  generateReport,
+  uploadCompanyLogo,
+  getCompanyLogoUrl,
+  deleteReport,
+  downloadReportFile,
+  openReport,
+} from '../services/api';
 import type { Report } from '../types';
 import { DateFilterBar } from '../components/DateFilterBar';
 
@@ -35,6 +44,9 @@ export const ReportsPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [generating, setGenerating] = useState<string | null>(null); // 'pdf' | 'docx' | null
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [openingId, setOpeningId] = useState<number | null>(null);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Logo branding state
@@ -100,21 +112,56 @@ export const ReportsPage: React.FC = () => {
     try {
       setGenerating(type);
       setError(null);
+      setActionSuccess(null);
       await generateReport(selectedPlantId, type, startDate, endDate);
       await fetchReports(); // reload list
-    } catch (err) {
+      setActionSuccess(`${type.toUpperCase()} report generated successfully. You can open or download it below.`);
+      setTimeout(() => setActionSuccess(null), 6000);
+    } catch (err: any) {
       console.error('Error generating report:', err);
-      setError(`Failed to generate ${type.toUpperCase()} report.`);
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : `Failed to generate ${type.toUpperCase()} report.`);
     } finally {
       setGenerating(null);
     }
   };
 
-  const getDownloadUrl = (filePath: string) => {
-    // Extract filename from windows/unix path
+  const handleOpenReport = async (reportId: number) => {
+    if (!selectedPlantId) return;
+    try {
+      setOpeningId(reportId);
+      setError(null);
+      const res = await openReport(selectedPlantId, reportId);
+      setActionSuccess(res.message);
+      setTimeout(() => setActionSuccess(null), 5000);
+    } catch (err: any) {
+      console.error('Error opening report:', err);
+      setError(err.response?.data?.detail || 'Failed to open report in default application.');
+    } finally {
+      setOpeningId(null);
+    }
+  };
+
+  const handleDownloadReport = async (reportId: number, filePath: string, reportType: string) => {
+    if (!selectedPlantId) return;
     const parts = filePath.split(/[\\/]/);
-    const filename = parts[parts.length - 1];
-    return `http://localhost:8000/static-reports/${filename}`;
+    const filename = parts[parts.length - 1] || `report_${reportId}.${reportType}`;
+    try {
+      setDownloadingId(reportId);
+      setError(null);
+      await downloadReportFile(selectedPlantId, reportId, filename);
+    } catch (err: any) {
+      console.error('Error downloading report:', err);
+      // Fallback: direct window open if blob download encountered an issue
+      try {
+        const downloadUrl = `/api/plants/${selectedPlantId}/reports/${reportId}/download`;
+        window.open(downloadUrl, '_blank');
+      } catch {
+        setError(err.response?.data?.detail || 'Failed to download report.');
+      }
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   if (!selectedPlantId) {
@@ -239,7 +286,8 @@ export const ReportsPage: React.FC = () => {
         </CardContent>
       </Card>
 
-      {error && <Alert severity="error">{error}</Alert>}
+      {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
+      {actionSuccess && <Alert severity="success" onClose={() => setActionSuccess(null)}>{actionSuccess}</Alert>}
 
       <Typography variant="h6" sx={{ fontWeight: 600 }}>Dossier Archives</Typography>
 
@@ -257,7 +305,6 @@ export const ReportsPage: React.FC = () => {
           }}
         >
           <Table size="small">
-
             <TableHead>
               <TableRow>
                 <TableCell><Typography variant="subtitle2">Report Title</Typography></TableCell>
@@ -275,16 +322,29 @@ export const ReportsPage: React.FC = () => {
                   <TableCell>{new Date(row.generated_at).toLocaleString()}</TableCell>
                   <TableCell>{row.period_start} to {row.period_end}</TableCell>
                   <TableCell align="right">
-                    <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                    <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        color="primary"
+                        startIcon={openingId === row.id ? <CircularProgress size={16} color="inherit" /> : <LaunchRoundedIcon />}
+                        onClick={() => handleOpenReport(row.id)}
+                        disabled={openingId === row.id}
+                        sx={{ textTransform: 'none', fontWeight: 600 }}
+                        title={`Open ${row.report_type.toUpperCase()} directly in desktop application`}
+                      >
+                        {openingId === row.id ? 'Opening...' : 'Open'}
+                      </Button>
                       <Button
                         variant="outlined"
                         size="small"
-                        startIcon={<FileDownloadRoundedIcon />}
-                        href={getDownloadUrl(row.file_path)}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        startIcon={downloadingId === row.id ? <CircularProgress size={16} color="inherit" /> : <FileDownloadRoundedIcon />}
+                        onClick={() => handleDownloadReport(row.id, row.file_path, row.report_type)}
+                        disabled={downloadingId === row.id}
+                        sx={{ textTransform: 'none' }}
+                        title="Download report file"
                       >
-                        Download
+                        {downloadingId === row.id ? 'Saving...' : 'Download'}
                       </Button>
                       <Button
                         variant="outlined"
@@ -293,6 +353,8 @@ export const ReportsPage: React.FC = () => {
                         startIcon={<DeleteOutlineRoundedIcon />}
                         onClick={() => handleDeleteReport(row.id, row.title)}
                         disabled={deletingId === row.id}
+                        sx={{ textTransform: 'none' }}
+                        title="Delete report"
                       >
                         {deletingId === row.id ? 'Deleting...' : 'Delete'}
                       </Button>

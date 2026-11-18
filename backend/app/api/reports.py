@@ -9,6 +9,7 @@ from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -64,7 +65,14 @@ def generate_report(
             status="completed",
             message="Report generated successfully.",
         )
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(ve),
+        )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate report: {e}",
@@ -137,5 +145,88 @@ def delete_report(plant_id: int, report_id: int, db: Session = Depends(get_db)):
     db.delete(report)
     db.commit()
     return {"success": True, "message": f"Report '{report.report_title}' deleted successfully."}
+
+
+@router.get(
+    "/{plant_id}/reports/{report_id}/download",
+    summary="Download a generated report file",
+)
+def download_report(plant_id: int, report_id: int, db: Session = Depends(get_db)):
+    """Stream the generated PDF or DOCX file as an attachment download."""
+    import os
+    report = (
+        db.query(Report)
+        .filter(Report.id == report_id, Report.plant_id == plant_id)
+        .first()
+    )
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Report with id {report_id} not found.",
+        )
+
+    if not report.file_path or not os.path.exists(report.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report file does not exist on disk.",
+        )
+
+    filename = os.path.basename(report.file_path)
+    media_type = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if report.report_type.lower() == "docx" or filename.lower().endswith(".docx")
+        else "application/pdf"
+    )
+
+    return FileResponse(
+        path=report.file_path,
+        media_type=media_type,
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/{plant_id}/reports/{report_id}/open",
+    summary="Open report file in default desktop application",
+)
+def open_report(plant_id: int, report_id: int, db: Session = Depends(get_db)):
+    """Open the generated report directly on the host machine using Microsoft Word or default PDF reader."""
+    import os
+    import platform
+    import subprocess
+
+    report = (
+        db.query(Report)
+        .filter(Report.id == report_id, Report.plant_id == plant_id)
+        .first()
+    )
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Report with id {report_id} not found.",
+        )
+
+    if not report.file_path or not os.path.exists(report.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report file does not exist on disk.",
+        )
+
+    filename = os.path.basename(report.file_path)
+    try:
+        if platform.system() == "Windows":
+            os.startfile(report.file_path)
+        elif platform.system() == "Darwin":
+            subprocess.run(["open", report.file_path], check=True)
+        else:
+            subprocess.run(["xdg-open", report.file_path], check=True)
+        return {"success": True, "message": f"Opened '{filename}' in default application."}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to open report file: {e}",
+        )
+
 
 

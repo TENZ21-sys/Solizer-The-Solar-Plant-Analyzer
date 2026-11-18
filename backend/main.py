@@ -78,6 +78,8 @@ def create_app() -> FastAPI:
     mimetypes.add_type("application/javascript", ".js")
     mimetypes.add_type("text/css", ".css")
     mimetypes.add_type("image/svg+xml", ".svg")
+    mimetypes.add_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx")
+    mimetypes.add_type("application/pdf", ".pdf")
     
     # Extract path for bundled frontend
     if hasattr(sys, '_MEIPASS'):

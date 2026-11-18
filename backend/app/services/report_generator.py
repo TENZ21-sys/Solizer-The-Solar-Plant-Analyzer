@@ -2795,9 +2795,11 @@ def generate_and_save_report(
 
     daily_records = get_daily_plant_records(db, plant_id, start_date=start_date, end_date=end_date)
     if not daily_records:
-        raise ValueError("No daily records available for this plant.")
+        raise ValueError("No SCADA operational records found for this plant. Please import daily records before generating a report.")
 
     inverters = db.query(Inverter).filter(Inverter.plant_id == plant_id).all()
+    if not inverters:
+        raise ValueError("No inverters configured for this plant. Please configure inverters and import operational data before generating a report.")
     sorted_inverters = sorted(inverters, key=lambda inv: inv.name)
     inverter_ids = {inv.id: inv.name for inv in sorted_inverters}
     
