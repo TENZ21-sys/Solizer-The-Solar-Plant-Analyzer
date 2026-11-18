@@ -13,7 +13,7 @@ import { DegradationPage } from './pages/DegradationPage';
 import { IrradiationPage } from './pages/IrradiationPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { ReportsPage } from './pages/ReportsPage';
-import PlaceholderPage from './pages/PlaceholderPage';
+import { SettingsPage } from './pages/SettingsPage';
 
 const App: React.FC = () => {
   return (
@@ -32,15 +32,7 @@ const App: React.FC = () => {
               <Route path="/irradiation" element={<IrradiationPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/reports" element={<ReportsPage />} />
-              <Route
-                path="/settings"
-                element={
-                  <PlaceholderPage
-                    title="System Settings"
-                    description="Configure global KPI thresholds, import mappings, and system properties."
-                  />
-                }
-              />
+              <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           </Layout>
         </Router>

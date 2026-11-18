@@ -108,3 +108,34 @@ def list_reports(plant_id: int, db: Session = Depends(get_db)):
         for r in reports
     ]
 
+
+@router.delete(
+    "/{plant_id}/reports/{report_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a generated report",
+)
+def delete_report(plant_id: int, report_id: int, db: Session = Depends(get_db)):
+    """Permanently delete a generated report record and remove the file from disk."""
+    import os
+    report = (
+        db.query(Report)
+        .filter(Report.id == report_id, Report.plant_id == plant_id)
+        .first()
+    )
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Report with id {report_id} not found.",
+        )
+
+    if report.file_path and os.path.exists(report.file_path):
+        try:
+            os.remove(report.file_path)
+        except Exception:
+            pass
+
+    db.delete(report)
+    db.commit()
+    return {"success": True, "message": f"Report '{report.report_title}' deleted successfully."}
+
+

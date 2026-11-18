@@ -21,8 +21,9 @@ import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded';
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import CloudUploadRoundedIcon from '@mui/icons-material/CloudUploadRounded';
 import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded';
+import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import { usePlant } from '../context/PlantContext';
-import { getReports, generateReport, uploadCompanyLogo, getCompanyLogoUrl } from '../services/api';
+import { getReports, generateReport, uploadCompanyLogo, getCompanyLogoUrl, deleteReport } from '../services/api';
 import type { Report } from '../types';
 import { DateFilterBar } from '../components/DateFilterBar';
 
@@ -33,12 +34,30 @@ export const ReportsPage: React.FC = () => {
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [generating, setGenerating] = useState<string | null>(null); // 'pdf' | 'docx' | null
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Logo branding state
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoSuccess, setLogoSuccess] = useState<string | null>(null);
   const [logoKey, setLogoKey] = useState(Date.now()); // cache buster for image
+
+  const handleDeleteReport = async (reportId: number, title: string) => {
+    if (!selectedPlantId) return;
+    if (!window.confirm(`Are you sure you want to permanently delete "${title}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      setDeletingId(reportId);
+      await deleteReport(selectedPlantId, reportId);
+      await fetchReports();
+    } catch (err: any) {
+      console.error('Error deleting report:', err);
+      setError(err.response?.data?.detail || 'Failed to delete report.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedPlantId || !event.target.files || event.target.files.length === 0) return;
@@ -245,7 +264,7 @@ export const ReportsPage: React.FC = () => {
                 <TableCell><Typography variant="subtitle2">Format</Typography></TableCell>
                 <TableCell><Typography variant="subtitle2">Date Generated</Typography></TableCell>
                 <TableCell><Typography variant="subtitle2">Analysis Period</Typography></TableCell>
-                <TableCell align="right"><Typography variant="subtitle2">Download</Typography></TableCell>
+                <TableCell align="right"><Typography variant="subtitle2">Actions</Typography></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -256,16 +275,28 @@ export const ReportsPage: React.FC = () => {
                   <TableCell>{new Date(row.generated_at).toLocaleString()}</TableCell>
                   <TableCell>{row.period_start} to {row.period_end}</TableCell>
                   <TableCell align="right">
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      startIcon={<FileDownloadRoundedIcon />}
-                      href={getDownloadUrl(row.file_path)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Download
-                    </Button>
+                    <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<FileDownloadRoundedIcon />}
+                        href={getDownloadUrl(row.file_path)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Download
+                      </Button>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        color="error"
+                        startIcon={<DeleteOutlineRoundedIcon />}
+                        onClick={() => handleDeleteReport(row.id, row.title)}
+                        disabled={deletingId === row.id}
+                      >
+                        {deletingId === row.id ? 'Deleting...' : 'Delete'}
+                      </Button>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))}

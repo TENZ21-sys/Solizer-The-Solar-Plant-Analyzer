@@ -251,6 +251,112 @@ def add_daily_record(
     )
 
 
+@router.get(
+    "/{plant_id}/daily-records",
+    summary="List recent daily records for management and review",
+)
+def list_daily_records(
+    plant_id: int,
+    limit: int = 60,
+    db: Session = Depends(get_db),
+):
+    """Retrieve daily operational records grouped by date for reviewing and editing."""
+    plant = db.query(Plant).filter(Plant.id == plant_id).first()
+    if not plant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Plant with id {plant_id} not found.",
+        )
+
+    inv_ids = [inv.id for inv in plant.inverters]
+    if not inv_ids:
+        return {"records": []}
+
+    records = (
+        db.query(DailyRecord)
+        .filter(DailyRecord.inverter_id.in_(inv_ids))
+        .order_by(DailyRecord.record_date.desc())
+        .all()
+    )
+
+    from collections import defaultdict
+    grouped = defaultdict(lambda: {
+        "record_date": None,
+        "generation_kwh": 0.0,
+        "irradiation_wh_m2": 0.0,
+        "grid_failure_kwh": 0.0,
+        "curtailment_kwh": 0.0,
+        "grid_loss_kwh": 0.0,
+        "machine_loss_kwh": 0.0,
+        "inverter_count": 0,
+    })
+
+    for r in records:
+        d_str = r.record_date.isoformat()
+        entry = grouped[d_str]
+        entry["record_date"] = d_str
+        entry["generation_kwh"] += round(r.generation, 1)
+        entry["irradiation_wh_m2"] = max(entry["irradiation_wh_m2"], round(r.irradiation, 1))
+        entry["grid_failure_kwh"] += round(r.grid_failure, 1)
+        entry["curtailment_kwh"] += round(r.curtailment, 1)
+        entry["grid_loss_kwh"] += round(r.grid_loss, 1)
+        entry["machine_loss_kwh"] += round(r.machine_loss, 1)
+        entry["inverter_count"] += 1
+
+    sorted_dates = sorted(grouped.keys(), reverse=True)[:limit]
+    result = [grouped[d] for d in sorted_dates]
+    return {"records": result}
+
+
+@router.delete(
+    "/{plant_id}/daily-records/{record_date}",
+    summary="Delete daily record entries for a specific date",
+)
+def delete_daily_record(
+    plant_id: int,
+    record_date: str,
+    db: Session = Depends(get_db),
+):
+    """Delete all records on a specific date for a plant (if entered mistakenly)."""
+    plant = db.query(Plant).filter(Plant.id == plant_id).first()
+    if not plant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Plant with id {plant_id} not found.",
+        )
+
+    try:
+        from datetime import datetime as dt
+        d_val = dt.strptime(record_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid date format. Expected YYYY-MM-DD.",
+        )
+
+    inv_ids = [inv.id for inv in plant.inverters]
+    deleted_count = 0
+    if inv_ids:
+        deleted_count = (
+            db.query(DailyRecord)
+            .filter(DailyRecord.inverter_id.in_(inv_ids), DailyRecord.record_date == d_val)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+
+    try:
+        generate_alerts_and_recommendations(db, plant_id)
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "message": f"Successfully deleted daily records for {record_date} ({deleted_count} inverter entries removed).",
+        "deleted_count": deleted_count,
+    }
+
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Company Logo Branding
 # ═══════════════════════════════════════════════════════════════════════════

@@ -160,12 +160,21 @@ export const generateReport = (
 export const getReports = (plantId: number): Promise<Report[]> =>
   api.get(`/plants/${plantId}/reports`).then(unwrap);
 
-// ─── Daily Manual Entry ─────────────────────────────────────────────────────
+export const deleteReport = (plantId: number, reportId: number): Promise<{ success: boolean; message: string }> =>
+  api.delete(`/plants/${plantId}/reports/${reportId}`).then(unwrap);
+
+// ─── Daily Manual Entry & Management ────────────────────────────────────────
 export const addDailyRecord = (
   plantId: number,
   data: DailyRecordInput,
 ): Promise<DailyRecordInputResponse> =>
   api.post(`/plants/${plantId}/daily-record`, data).then(unwrap);
+
+export const getDailyRecords = (plantId: number, limit: number = 30): Promise<{ count: number; records: any[] }> =>
+  api.get(`/plants/${plantId}/daily-records`, { params: { limit } }).then(unwrap);
+
+export const deleteDailyRecord = (plantId: number, recordDate: string): Promise<{ success: boolean; message: string; deleted_count: number }> =>
+  api.delete(`/plants/${plantId}/daily-records/${recordDate}`).then(unwrap);
 
 // ─── Branding & Company Logo ────────────────────────────────────────────────
 export const uploadCompanyLogo = (
@@ -183,6 +192,40 @@ export const uploadCompanyLogo = (
 
 export const getCompanyLogoUrl = (plantId: number): string =>
   `/api/plants/${plantId}/logo`;
+
+// ─── Settings & Maintenance ────────────────────────────────────────────────
+export interface SystemStats {
+  database_path?: string;
+  db_size_bytes?: number;
+  db_size_mb?: number;
+  database_size_kb?: number;
+  total_plants?: number;
+  total_records?: number;
+  total_daily_records?: number;
+  total_reports?: number;
+  reports_dir?: string;
+  reports_folder?: string;
+  reports_dir_size_mb?: number;
+  reports_folder_size_kb?: number;
+}
+
+export const getSettings = (): Promise<{ settings: Record<string, string> }> =>
+  api.get('/settings').then(unwrap);
+
+export const updateSettings = (settings: Record<string, string>): Promise<{ success: boolean; message: string }> =>
+  api.post('/settings', { settings }).then(unwrap);
+
+export const getSystemStats = (): Promise<SystemStats> =>
+  api.get('/settings/stats').then(unwrap);
+
+export const getDatabaseBackupUrl = (): string =>
+  `${(import.meta as any).env?.DEV ? 'http://localhost:8000/api' : '/api'}/settings/backup`;
+
+export const optimizeDatabase = (): Promise<{ success: boolean; message: string; db_size_mb?: number }> =>
+  api.post('/settings/optimize-db').then(unwrap);
+
+export const clearSystemCache = (): Promise<{ success: boolean; message: string; files_cleared?: number }> =>
+  api.post('/settings/clear-cache').then(unwrap);
 
 export default api;
 

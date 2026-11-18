@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -38,6 +38,7 @@ import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded';
 
 import { useThemeMode } from '../theme/ThemeContext';
 import { usePlant } from '../context/PlantContext';
+import { getSettings } from '../services/api';
 import { ACCENT_GRADIENT } from '../theme/theme';
 
 const SIDEBAR_WIDTH = 260;
@@ -47,29 +48,50 @@ interface NavigationItem {
   name: string;
   path: string;
   icon: React.ReactElement;
+  key?: string;
 }
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [collapsed, setCollapsed] = useState(false);
+  const [settings, setSettings] = useState<Record<string, string>>({});
   const { mode, toggleTheme } = useThemeMode();
   const { plants, selectedPlantId, setSelectedPlantId, loading } = usePlant();
   
   const location = useLocation();
   const navigate = useNavigate();
 
-  const menuItems: NavigationItem[] = [
+  useEffect(() => {
+    getSettings()
+      .then((res) => {
+        if (res && res.settings) setSettings(res.settings);
+      })
+      .catch(() => {});
+
+    const onSettingsUpdated = (e: any) => {
+      if (e.detail) setSettings(e.detail);
+    };
+    window.addEventListener('settingsUpdated', onSettingsUpdated);
+    return () => window.removeEventListener('settingsUpdated', onSettingsUpdated);
+  }, []);
+
+  const allMenuItems: NavigationItem[] = [
     { name: 'Dashboard', path: '/', icon: <HomeRoundedIcon /> },
     { name: 'Plant Profile', path: '/plant', icon: <FactoryRoundedIcon /> },
     { name: 'Data Import', path: '/import', icon: <CloudUploadRoundedIcon /> },
     { name: 'Performance', path: '/performance', icon: <EqualizerRoundedIcon /> },
-    { name: 'Inverters', path: '/inverters', icon: <MemoryRoundedIcon /> },
-    { name: 'Loss Analysis', path: '/losses', icon: <ReportProblemRoundedIcon /> },
-    { name: 'Degradation', path: '/degradation', icon: <TimelineRoundedIcon /> },
-    { name: 'Irradiation', path: '/irradiation', icon: <WbSunnyRoundedIcon /> },
-    { name: 'Alerts', path: '/alerts', icon: <Badge color="error" variant="dot"><NotificationsIcon /></Badge> },
+    { name: 'Inverters', path: '/inverters', icon: <MemoryRoundedIcon />, key: 'enabled_inverters' },
+    { name: 'Loss Analysis', path: '/losses', icon: <ReportProblemRoundedIcon />, key: 'enabled_losses' },
+    { name: 'Degradation', path: '/degradation', icon: <TimelineRoundedIcon />, key: 'enabled_degradation' },
+    { name: 'Irradiation', path: '/irradiation', icon: <WbSunnyRoundedIcon />, key: 'enabled_irradiation' },
+    { name: 'Alerts', path: '/alerts', icon: <Badge color="error" variant="dot"><NotificationsIcon /></Badge>, key: 'enabled_alerts' },
     { name: 'Reports', path: '/reports', icon: <DescriptionRoundedIcon /> },
     { name: 'Settings', path: '/settings', icon: <SettingsRoundedIcon /> },
   ];
+
+  const menuItems = allMenuItems.filter((item) => {
+    if (!item.key) return true;
+    return settings[item.key] !== 'false';
+  });
 
   const handlePlantChange = (event: any) => {
     const val = event.target.value;

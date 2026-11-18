@@ -2,10 +2,31 @@
 SoliZer Intelligence Platform - FastAPI Backend Application
 Main entry point and application factory.
 """
+import os
+import sys
+import traceback
+
+# Force logging to app.log when frozen (as executable) so all startup/import events are captured
+if getattr(sys, 'frozen', False):
+    log_dir = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Solizer")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = open(os.path.join(log_dir, "app.log"), "a", encoding="utf-8", buffering=1)
+    sys.stdout = log_file
+    sys.stderr = log_file
+
+def _log_uncaught_exception(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    print("\n[CRITICAL UNCAUGHT EXCEPTION]", flush=True)
+    traceback.print_exception(exc_type, exc_value, exc_traceback)
+
+sys.excepthook = _log_uncaught_exception
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, plants, data_import, analytics, alerts, reports
+from app.api import health, plants, data_import, analytics, alerts, reports, settings
 from app.db.database import engine, Base
 
 
@@ -44,6 +65,7 @@ def create_app() -> FastAPI:
     app.include_router(analytics.router, prefix="/api/plants", tags=["Analytics"])
     app.include_router(alerts.router, prefix="/api/plants", tags=["Alerts"])
     app.include_router(reports.router, prefix="/api/plants", tags=["Reports"])
+    app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 
 
     # Serve Frontend UI
@@ -100,24 +122,22 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-    import sys
-    import os
     import threading
     import time
-    import webview
-    
-    # Force logging to app.log when frozen (as executable)
-    is_frozen = getattr(sys, 'frozen', False)
-    if is_frozen:
-        log_dir = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Solizer")
-        os.makedirs(log_dir, exist_ok=True)
-        log_file = open(os.path.join(log_dir, "app.log"), "w", encoding="utf-8", buffering=1)
-        sys.stdout = log_file
-        sys.stderr = log_file
-        
+    import urllib.request
+    import webbrowser
+
+    # Optional pywebview for desktop window
+    has_webview = False
+    try:
+        import webview
+        has_webview = True
+    except Exception as e:
+        print(f"pywebview is not available ({e}). Defaulting to system web browser.", flush=True)
+
     def start_server():
         try:
-            print("Starting Uvicorn server...", flush=True)
+            print("Starting Uvicorn server on http://127.0.0.1:8000 ...", flush=True)
             uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
         except Exception as e:
             print(f"Uvicorn server error: {e}", flush=True)
@@ -125,23 +145,49 @@ if __name__ == "__main__":
     # Start FastAPI in a background daemon thread
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()
-    
-    # Give the server a moment to bind to the port
-    time.sleep(0.5)
-    
-    print("Creating WebView window...", flush=True)
-    # Create pywebview window
-    webview.create_window(
-        title="Solize- The Solar Plant Analyzer",
-        url="http://127.0.0.1:8000",
-        width=1280,
-        height=720,
-        resizable=True
-    )
-    
-    # Start the GUI loop
-    webview.start()
-    
-    print("WebView window closed. Exiting application.", flush=True)
-    sys.exit(0)
 
+    # Wait for the backend server to be healthy and responsive
+    print("Waiting for local server to become ready...", flush=True)
+    server_ready = False
+    for attempt in range(50):
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=0.5) as resp:
+                if resp.status == 200:
+                    server_ready = True
+                    print(f"Server is ready after {attempt * 0.1:.1f}s!", flush=True)
+                    break
+        except Exception:
+            time.sleep(0.1)
+
+    if not server_ready:
+        print("Warning: Backend health check timed out, proceeding...", flush=True)
+
+    gui_success = False
+    if has_webview:
+        try:
+            print("Creating native WebView window...", flush=True)
+            # Create pywebview window
+            webview.create_window(
+                title="Solize - The Solar Plant Analyzer",
+                url="http://127.0.0.1:8000",
+                width=1280,
+                height=720,
+                resizable=True
+            )
+            gui_success = True
+            # Start the GUI loop
+            webview.start()
+            print("WebView window closed. Exiting application.", flush=True)
+            sys.exit(0)
+        except Exception as gui_err:
+            print(f"Native WebView could not initialize ({gui_err}). Opening default browser...", flush=True)
+
+    if not gui_success:
+        print("Opening application in default web browser at http://127.0.0.1:8000 ...", flush=True)
+        webbrowser.open("http://127.0.0.1:8000")
+        try:
+            while server_thread.is_alive():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Received shutdown signal. Exiting.", flush=True)
+            sys.exit(0)

@@ -34,6 +34,7 @@ _DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "So
 os.makedirs(_DATA_DIR, exist_ok=True)
 
 db_path = os.path.join(_DATA_DIR, 'solizer.db').replace("\\", "/")
+DB_PATH = db_path
 DATABASE_URL = f"sqlite:///{db_path}"
 
 # ---------------------------------------------------------------------------
@@ -47,12 +48,17 @@ engine = create_engine(
 )
 
 
-# Enable SQLite foreign-key enforcement (off by default in SQLite)
+# Enable SQLite foreign-key enforcement and high-performance settings
 @event.listens_for(engine, "connect")
 def _set_sqlite_pragma(dbapi_connection, connection_record):  # noqa: ANN001
-    """Turn on foreign-key constraint enforcement for every connection."""
+    """Turn on foreign-key constraint enforcement and performance optimizations."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+    cursor.execute("PRAGMA temp_store=MEMORY")
+    cursor.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
     cursor.close()
 
 

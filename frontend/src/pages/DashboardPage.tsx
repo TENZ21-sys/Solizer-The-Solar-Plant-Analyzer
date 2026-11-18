@@ -18,6 +18,14 @@ import {
   DialogActions,
   TextField,
   Alert as MuiAlert,
+  Tabs,
+  Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import Grid from '@mui/material/Grid';
@@ -36,6 +44,7 @@ import ErrorRoundedIcon from '@mui/icons-material/ErrorRounded';
 import ConstructionRoundedIcon from '@mui/icons-material/ConstructionRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import AttachMoneyRoundedIcon from '@mui/icons-material/AttachMoneyRounded';
+import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 
 import {
   AreaChart,
@@ -52,7 +61,7 @@ import {
 } from 'recharts';
 
 import { usePlant } from '../context/PlantContext';
-import { getDashboard, addDailyRecord } from '../services/api';
+import { getDashboard, addDailyRecord, getSettings, getDailyRecords, deleteDailyRecord } from '../services/api';
 import type { DashboardSummary, DailyRecordInput } from '../types';
 import { DateFilterBar } from '../components/DateFilterBar';
 
@@ -65,10 +74,19 @@ export const DashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Currency & Settings state
+  const [currencySymbol, setCurrencySymbol] = useState('$');
+  const [tariffRate, setTariffRate] = useState(0.12);
+
   // Manual Daily Record Modal State
   const [dailyModalOpen, setDailyModalOpen] = useState(false);
+  const [modalTab, setModalTab] = useState(0); // 0: Add log, 1: Manage logs
   const [savingDaily, setSavingDaily] = useState(false);
   const [dailyStatus, setDailyStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [recentRecords, setRecentRecords] = useState<any[]>([]);
+  const [loadingRecords, setLoadingRecords] = useState(false);
+  const [deletingDate, setDeletingDate] = useState<string | null>(null);
+
   const [dailyForm, setDailyForm] = useState<DailyRecordInput>({
     record_date: new Date().toISOString().split('T')[0],
     generation_kwh: 0,
@@ -78,6 +96,24 @@ export const DashboardPage: React.FC = () => {
     grid_loss_kwh: 0,
     machine_loss_kwh: 0,
   });
+
+  const fetchSettings = () => {
+    getSettings()
+      .then((res) => {
+        if (res?.settings) {
+          if (res.settings.currency_symbol) setCurrencySymbol(res.settings.currency_symbol);
+          if (res.settings.tariff_rate) setTariffRate(parseFloat(res.settings.tariff_rate) || 0.12);
+        }
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    fetchSettings();
+    const onSettingsUpdated = () => fetchSettings();
+    window.addEventListener('settingsUpdated', onSettingsUpdated);
+    return () => window.removeEventListener('settingsUpdated', onSettingsUpdated);
+  }, []);
 
   const fetchDashboardData = async () => {
     if (selectedPlantId === null) return;
@@ -96,6 +132,37 @@ export const DashboardPage: React.FC = () => {
       setData(getMockDashboardData());
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchRecentLogs = async () => {
+    if (!selectedPlantId) return;
+    try {
+      setLoadingRecords(true);
+      const res = await getDailyRecords(selectedPlantId, 30);
+      setRecentRecords(res.records || []);
+    } catch (err) {
+      console.error('Failed to fetch recent logs:', err);
+    } finally {
+      setLoadingRecords(false);
+    }
+  };
+
+  const handleDeleteDailyRecord = async (recordDate: string) => {
+    if (!selectedPlantId) return;
+    if (!window.confirm(`Are you sure you want to permanently delete all operational records for ${recordDate}? This will immediately recompute all KPIs and analytics.`)) {
+      return;
+    }
+    try {
+      setDeletingDate(recordDate);
+      await deleteDailyRecord(selectedPlantId, recordDate);
+      await fetchRecentLogs();
+      await fetchDashboardData();
+    } catch (err: any) {
+      console.error('Error deleting daily log:', err);
+      alert(err.response?.data?.detail || 'Failed to delete record.');
+    } finally {
+      setDeletingDate(null);
     }
   };
 
@@ -165,7 +232,7 @@ export const DashboardPage: React.FC = () => {
   const standardPR = data?.performance_ratio ?? 0;
   const iecPR = standardPR > 0 ? (standardPR / 0.96).toFixed(1) : '0.0';
 
-  const tariff = 0.12;
+  const tariff = tariffRate;
   const totalGenKwh = data?.total_generation_kwh ?? 0;
   const realizedRevenue = totalGenKwh * tariff;
   const totalLossKwh = Math.max((data?.possible_generation_kwh ?? 0) - totalGenKwh, 0);
@@ -387,7 +454,7 @@ export const DashboardPage: React.FC = () => {
                 Financial Revenue & Loss Intelligence
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Calculated with standard energy feed-in tariff of $0.12 / kWh (IEC 61724 Yield Standard)
+                Calculated with energy feed-in tariff of {currencySymbol}{tariffRate} / kWh (IEC 61724 Yield Standard)
               </Typography>
             </Box>
           </Box>
@@ -399,7 +466,7 @@ export const DashboardPage: React.FC = () => {
                 Realized Revenue
               </Typography>
               <Typography variant="h5" sx={{ fontWeight: 800, color: '#00e676', mt: 0.5 }}>
-                ${realizedRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {currencySymbol} {realizedRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </Typography>
             </Box>
           </Grid>
@@ -409,7 +476,7 @@ export const DashboardPage: React.FC = () => {
                 Estimated Revenue Lost
               </Typography>
               <Typography variant="h5" sx={{ fontWeight: 800, color: '#ff1744', mt: 0.5 }}>
-                ${estimatedRevenueLost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {currencySymbol} {estimatedRevenueLost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </Typography>
             </Box>
           </Grid>
@@ -419,7 +486,7 @@ export const DashboardPage: React.FC = () => {
                 Potential Gross Revenue
               </Typography>
               <Typography variant="h5" sx={{ fontWeight: 800, color: '#0288d1', mt: 0.5 }}>
-                ${(realizedRevenue + estimatedRevenueLost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {currencySymbol} {(realizedRevenue + estimatedRevenueLost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </Typography>
             </Box>
           </Grid>
@@ -584,108 +651,179 @@ export const DashboardPage: React.FC = () => {
         </Grid>
       </Grid>
 
-      {/* ─── Manual Daily Log Entry Modal ─── */}
-      <Dialog open={dailyModalOpen} onClose={() => !savingDaily && setDailyModalOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800 }}>Record Daily Plant Performance</DialogTitle>
+      {/* ─── Manual Daily Log Entry & Management Modal ─── */}
+      <Dialog open={dailyModalOpen} onClose={() => !savingDaily && setDailyModalOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>Plant Operational Daily Records</DialogTitle>
+        <Tabs
+          value={modalTab}
+          onChange={(_, val) => {
+            setModalTab(val);
+            if (val === 1) fetchRecentLogs();
+          }}
+          sx={{ borderBottom: 1, borderColor: 'divider', px: 3 }}
+        >
+          <Tab label="Record Daily Performance" />
+          <Tab label="Manage & Delete Logs" />
+        </Tabs>
+
         <DialogContent dividers>
-          <Box sx={{ py: 1, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-            <Typography variant="body2" color="text.secondary">
-              Input daily operational values. Figures will be distributed across all plant inverters and metrics will update immediately.
-            </Typography>
+          {modalTab === 0 && (
+            <Box sx={{ py: 1, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+              <Typography variant="body2" color="text.secondary">
+                Input daily operational values. Figures will be distributed across all plant inverters and metrics will update immediately.
+              </Typography>
 
-            {dailyStatus && (
-              <MuiAlert severity={dailyStatus.type} sx={{ mb: 1 }}>
-                {dailyStatus.message}
-              </MuiAlert>
-            )}
+              {dailyStatus && (
+                <MuiAlert severity={dailyStatus.type} sx={{ mb: 1 }}>
+                  {dailyStatus.message}
+                </MuiAlert>
+              )}
 
-            <TextField
-              fullWidth
-              type="date"
-              label="Log Date"
-              slotProps={{ inputLabel: { shrink: true } }}
-              value={dailyForm.record_date}
-              onChange={(e) => setDailyForm((prev) => ({ ...prev, record_date: e.target.value }))}
-            />
+              <TextField
+                fullWidth
+                type="date"
+                label="Log Date"
+                slotProps={{ inputLabel: { shrink: true } }}
+                value={dailyForm.record_date}
+                onChange={(e) => setDailyForm((prev) => ({ ...prev, record_date: e.target.value }))}
+              />
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Generation (kWh)"
-                  value={dailyForm.generation_kwh || ''}
-                  onChange={(e) => setDailyForm((prev) => ({ ...prev, generation_kwh: parseFloat(e.target.value) || 0 }))}
-                />
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Generation (kWh)"
+                    value={dailyForm.generation_kwh || ''}
+                    onChange={(e) => setDailyForm((prev) => ({ ...prev, generation_kwh: parseFloat(e.target.value) || 0 }))}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Irradiation (Wh/m²)"
+                    value={dailyForm.irradiation_wh_m2 || ''}
+                    onChange={(e) => setDailyForm((prev) => ({ ...prev, irradiation_wh_m2: parseFloat(e.target.value) || 0 }))}
+                    helperText="e.g. 5200 Wh/m² (or 5.2 kWh/m² × 1000)"
+                  />
+                </Grid>
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Irradiation (Wh/m²)"
-                  value={dailyForm.irradiation_wh_m2 || ''}
-                  onChange={(e) => setDailyForm((prev) => ({ ...prev, irradiation_wh_m2: parseFloat(e.target.value) || 0 }))}
-                  helperText="e.g. 5200 Wh/m² (or 5.2 kWh/m² × 1000)"
-                />
-              </Grid>
-            </Grid>
 
-            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'text.secondary', mt: 1 }}>
-              Downtime & Energy Losses (kWh)
-            </Typography>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'text.secondary', mt: 1 }}>
+                Downtime & Energy Losses (kWh)
+              </Typography>
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Grid Failure Loss (kWh)"
-                  value={dailyForm.grid_failure_kwh || ''}
-                  onChange={(e) => setDailyForm((prev) => ({ ...prev, grid_failure_kwh: parseFloat(e.target.value) || 0 }))}
-                />
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Grid Failure Loss (kWh)"
+                    value={dailyForm.grid_failure_kwh || ''}
+                    onChange={(e) => setDailyForm((prev) => ({ ...prev, grid_failure_kwh: parseFloat(e.target.value) || 0 }))}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Curtailment (kWh)"
+                    value={dailyForm.curtailment_kwh || ''}
+                    onChange={(e) => setDailyForm((prev) => ({ ...prev, curtailment_kwh: parseFloat(e.target.value) || 0 }))}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Grid Transmission Loss (kWh)"
+                    value={dailyForm.grid_loss_kwh || ''}
+                    onChange={(e) => setDailyForm((prev) => ({ ...prev, grid_loss_kwh: parseFloat(e.target.value) || 0 }))}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Machine / Inverter Loss (kWh)"
+                    value={dailyForm.machine_loss_kwh || ''}
+                    onChange={(e) => setDailyForm((prev) => ({ ...prev, machine_loss_kwh: parseFloat(e.target.value) || 0 }))}
+                  />
+                </Grid>
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Curtailment (kWh)"
-                  value={dailyForm.curtailment_kwh || ''}
-                  onChange={(e) => setDailyForm((prev) => ({ ...prev, curtailment_kwh: parseFloat(e.target.value) || 0 }))}
-                />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Grid Transmission Loss (kWh)"
-                  value={dailyForm.grid_loss_kwh || ''}
-                  onChange={(e) => setDailyForm((prev) => ({ ...prev, grid_loss_kwh: parseFloat(e.target.value) || 0 }))}
-                />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Machine / Inverter Loss (kWh)"
-                  value={dailyForm.machine_loss_kwh || ''}
-                  onChange={(e) => setDailyForm((prev) => ({ ...prev, machine_loss_kwh: parseFloat(e.target.value) || 0 }))}
-                />
-              </Grid>
-            </Grid>
-          </Box>
+            </Box>
+          )}
+
+          {modalTab === 1 && (
+            <Box sx={{ py: 1 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Review recent operational daily records. If any data was mistakenly entered, click <b>Delete</b> to remove all entries for that date and immediately recalculate KPIs.
+              </Typography>
+
+              {loadingRecords ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+                  <CircularProgress size={32} />
+                </Box>
+              ) : recentRecords.length === 0 ? (
+                <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+                  No daily records logged for this plant yet.
+                </Typography>
+              ) : (
+                <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 380 }}>
+                  <Table size="small" stickyHeader>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell><Typography variant="subtitle2">Date</Typography></TableCell>
+                        <TableCell align="right"><Typography variant="subtitle2">Generation (kWh)</Typography></TableCell>
+                        <TableCell align="right"><Typography variant="subtitle2">Irradiation (Wh/m²)</Typography></TableCell>
+                        <TableCell align="right"><Typography variant="subtitle2">Total Loss (kWh)</Typography></TableCell>
+                        <TableCell align="center"><Typography variant="subtitle2">Actions</Typography></TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {recentRecords.map((rec) => (
+                        <TableRow key={rec.date} hover>
+                          <TableCell sx={{ fontWeight: 600 }}>{rec.date}</TableCell>
+                          <TableCell align="right">{rec.total_generation?.toLocaleString() ?? 0}</TableCell>
+                          <TableCell align="right">{rec.total_irradiation?.toLocaleString() ?? 0}</TableCell>
+                          <TableCell align="right">{rec.total_loss?.toLocaleString() ?? 0}</TableCell>
+                          <TableCell align="center">
+                            <Button
+                              size="small"
+                              color="error"
+                              variant="outlined"
+                              startIcon={<DeleteOutlineRoundedIcon />}
+                              disabled={deletingDate === rec.date}
+                              onClick={() => handleDeleteDailyRecord(rec.date)}
+                              sx={{ py: 0.2, px: 1, fontSize: '0.75rem' }}
+                            >
+                              {deletingDate === rec.date ? 'Deleting...' : 'Delete'}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </Box>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, py: 2 }}>
           <Button onClick={() => setDailyModalOpen(false)} disabled={savingDaily}>
-            Cancel
+            Close
           </Button>
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleSaveDailyRecord}
-            disabled={savingDaily || dailyForm.generation_kwh <= 0}
-          >
-            {savingDaily ? 'Saving Log...' : 'Save Daily Record'}
-          </Button>
+          {modalTab === 0 && (
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handleSaveDailyRecord}
+              disabled={savingDaily || dailyForm.generation_kwh <= 0}
+            >
+              {savingDaily ? 'Saving Log...' : 'Save Daily Record'}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
     </Box>

@@ -51,7 +51,7 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 
-from app.db.models import Plant, DailyRecord, Report, Alert, Recommendation, Inverter
+from app.db.models import Plant, DailyRecord, Report, Alert, Recommendation, Inverter, SystemSettings
 from app.engines.aggregation import (
     get_daily_plant_records,
     aggregate_to_lifetime,
@@ -62,6 +62,7 @@ from app.engines.kpi_calculator import (
     calculate_cuf,
     calculate_specific_yield,
     calculate_availability,
+    calculate_temperature_corrected_pr,
     compute_lifetime_kpis,
     compute_monthly_kpis,
 )
@@ -102,6 +103,16 @@ def get_company_logo_path(plant_id: int) -> Optional[str]:
     return None
 
 
+def get_system_settings_dict(db: Session) -> dict[str, str]:
+    """Retrieve global system settings merged with defaults."""
+    from app.api.settings import DEFAULT_SETTINGS
+    db_settings = db.query(SystemSettings).filter(SystemSettings.plant_id.is_(None)).all()
+    merged = dict(DEFAULT_SETTINGS)
+    for s in db_settings:
+        merged[s.setting_key] = s.setting_value
+    return merged
+
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helper: Setup DOCX table styling
@@ -127,6 +138,29 @@ def set_cell_margins(cell, top=100, bottom=100, left=150, right=150):
 # ═══════════════════════════════════════════════════════════════════════
 # Chart Generation
 # ═══════════════════════════════════════════════════════════════════════
+def apply_top_legend(ax, ncol=None):
+    """Positions the legend horizontally above the plot area with clean spacing to prevent overlap."""
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    if ncol is None:
+        ncol = min(len(labels), 5)
+    ax.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=ncol,
+        frameon=True,
+        facecolor="#FFFFFF",
+        edgecolor="#CBD5E1",
+        fontsize=8,
+        columnspacing=1.0,
+        handlelength=1.4,
+        handletextpad=0.5,
+    )
+
+
 def generate_charts(
     plant: Plant,
     sorted_study_years: list[str],
@@ -157,66 +191,69 @@ def generate_charts(
         width = 0.8 / max(n_years, 1)
 
         # 1. Performance Ratio Chart (Monthly PR grouped by year)
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
         for idx, sy in enumerate(sorted_study_years):
             offset = (idx - (n_years - 1) / 2) * width
             prs = [monthly_kpis_by_year[sy].get(m_num, {}).get("pr", 0.0) for m_num in months_nums]
             ax.bar(x + offset, prs, width=width, label=sy, color=colors_list[idx % len(colors_list)])
         ax.axhline(plant.expected_pr, color="#e53935", linestyle="--", label=f"Expected ({plant.expected_pr}%)")
-        ax.set_title("Monthly Performance Ratio Comparison (%)", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Monthly Performance Ratio Comparison (%)", fontsize=11, fontweight="bold", pad=28)
         ax.set_xticks(x)
         ax.set_xticklabels(months_labels, fontsize=8)
         ax.set_ylabel("PR (%)")
-        ax.set_ylim(0, 100)
+        ax.set_ylim(0, 105)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        ax.legend(loc="lower left", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         pr_path = os.path.join(output_dir, "pr_chart.png")
-        plt.savefig(pr_path)
+        plt.savefig(pr_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["pr"] = pr_path
 
         # 2. Specific Yield Chart (Monthly Spec Yield grouped by year)
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
+        all_sys = []
         for idx, sy in enumerate(sorted_study_years):
             offset = (idx - (n_years - 1) / 2) * width
             sys = [monthly_kpis_by_year[sy].get(m_num, {}).get("specific_yield", 0.0) for m_num in months_nums]
+            all_sys.extend(sys)
             ax.bar(x + offset, sys, width=width, label=sy, color=colors_list[idx % len(colors_list)])
-        ax.set_title("Monthly Specific Yield Comparison (kWh/kWp)", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Monthly Specific Yield Comparison (kWh/kWp)", fontsize=11, fontweight="bold", pad=28)
         ax.set_xticks(x)
         ax.set_xticklabels(months_labels, fontsize=8)
         ax.set_ylabel("Specific Yield (kWh/kWp)")
+        ax.set_ylim(0, max(all_sys or [1.0]) * 1.25)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        ax.legend(loc="upper right", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         sy_path = os.path.join(output_dir, "specific_yield_chart.png")
-        plt.savefig(sy_path)
+        plt.savefig(sy_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["specific_yield"] = sy_path
 
         # 3. Inverter Generation Chart
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
         inv_names = [format_inverter_name(inv.name) for inv in sorted_inverters]
         x_inv = np.arange(len(inv_names))
         width_inv = 0.8 / max(n_years, 1)
+        all_inv_gens = []
         for idx, sy in enumerate(sorted_study_years):
             offset = (idx - (n_years - 1) / 2) * width_inv
             gens = [inverter_yearly_data[inv.id][sy]["generation"] / 1000.0 for inv in sorted_inverters]
+            all_inv_gens.extend(gens)
             ax.bar(x_inv + offset, gens, width=width_inv, label=sy, color=colors_list[idx % len(colors_list)])
-        ax.set_title("Inverter-Level Annual Generation Comparison (MWh)", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Inverter-Level Annual Generation Comparison (MWh)", fontsize=11, fontweight="bold", pad=28)
         ax.set_xticks(x_inv)
         ax.set_xticklabels(inv_names, rotation=20, ha="right", fontsize=8)
         ax.set_ylabel("Generation (MWh)")
+        ax.set_ylim(0, max(all_inv_gens or [1.0]) * 1.25)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        ax.legend(loc="upper right", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         inv_path = os.path.join(output_dir, "inverter_chart.png")
-        plt.savefig(inv_path)
+        plt.savefig(inv_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["inverters_gen"] = inv_path
 
         # 4. Inverter Performance Ratio Chart
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
         eff_frac = plant.module_efficiency / 100.0
         inv_area = plant.total_panel_area_sqm / max(plant.number_of_inverters, 1)
         for idx, sy in enumerate(sorted_study_years):
@@ -228,60 +265,63 @@ def generate_charts(
                 pr_val = calculate_pr(gen, irrad, inv_area, eff_frac, plant.daily_running_hours)
                 prs.append(pr_val)
             ax.bar(x_inv + offset, prs, width=width_inv, label=sy, color=colors_list[idx % len(colors_list)])
-        ax.set_title("Inverter-Level Annual Performance Ratio Summary (%)", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Inverter-Level Annual Performance Ratio Summary (%)", fontsize=11, fontweight="bold", pad=28)
         ax.set_xticks(x_inv)
         ax.set_xticklabels(inv_names, rotation=20, ha="right", fontsize=8)
         ax.set_ylabel("PR (%)")
-        ax.set_ylim(0, 100)
+        ax.set_ylim(0, 105)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        ax.legend(loc="lower left", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         inv_pr_path = os.path.join(output_dir, "inverter_pr_chart.png")
-        plt.savefig(inv_pr_path)
+        plt.savefig(inv_pr_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["inverters_pr"] = inv_pr_path
 
         # 5. Block-Level Annual Generation Chart
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
         sorted_blocks = sorted(list(set(inv.block_name for inv in sorted_inverters)))
         x_blk = np.arange(len(sorted_blocks))
         width_blk = 0.8 / max(n_years, 1)
+        all_blk_gens = []
         for idx, sy in enumerate(sorted_study_years):
             offset = (idx - (n_years - 1) / 2) * width_blk
             gens = [block_yearly_data[block][sy]["generation"] / 1000.0 for block in sorted_blocks]
+            all_blk_gens.extend(gens)
             ax.bar(x_blk + offset, gens, width=width_blk, label=sy, color=colors_list[idx % len(colors_list)])
-        ax.set_title("Block-Level Annual Generation Comparison (MWh)", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Block-Level Annual Generation Comparison (MWh)", fontsize=11, fontweight="bold", pad=28)
         ax.set_xticks(x_blk)
         ax.set_xticklabels(sorted_blocks, fontsize=8)
         ax.set_ylabel("Generation (MWh)")
+        ax.set_ylim(0, max(all_blk_gens or [1.0]) * 1.25)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        ax.legend(loc="upper right", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         blk_path = os.path.join(output_dir, "block_chart.png")
-        plt.savefig(blk_path)
+        plt.savefig(blk_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["blocks_gen"] = blk_path
 
         # 6. Monthly Irradiation Chart
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
+        all_irrads = []
         for idx, sy in enumerate(sorted_study_years):
             offset = (idx - (n_years - 1) / 2) * width
             irrads = [monthly_kpis_by_year[sy].get(m_num, {}).get("irradiation", 0.0) for m_num in months_nums]
+            all_irrads.extend(irrads)
             ax.bar(x + offset, irrads, width=width, label=sy, color=colors_list[idx % len(colors_list)])
-        ax.set_title("Monthly Solar Irradiation Comparison (kWh/m²)", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Monthly Solar Irradiation Comparison (kWh/m²)", fontsize=11, fontweight="bold", pad=28)
         ax.set_xticks(x)
         ax.set_xticklabels(months_labels, fontsize=8)
         ax.set_ylabel("Irradiation (kWh/m²)")
+        ax.set_ylim(0, max(all_irrads or [1.0]) * 1.25)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        ax.legend(loc="upper right", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         irr_path = os.path.join(output_dir, "irradiation_chart.png")
-        plt.savefig(irr_path)
+        plt.savefig(irr_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["irradiation"] = irr_path
 
         # 7. Annual Total Generation Chart (Figure 4.1)
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
         annual_gens = []
         for sy in sorted_study_years:
             total_gen_sy = sum(monthly_kpis_by_year[sy].get(m_num, {}).get("generation_mwh", 0.0) for m_num in months_nums)
@@ -304,38 +344,39 @@ def generate_charts(
                 color='#2D3748'
             )
             
-        ax.set_title("Annual Total Generation (MWh)", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Annual Total Generation (MWh)", fontsize=11, fontweight="bold", pad=16)
         ax.set_xticks(x_ann)
         ax.set_xticklabels(sorted_study_years, fontsize=9)
         ax.set_ylabel("Generation (MWh)")
-        ax.set_ylim(0, max(annual_gens or [1.0]) * 1.18)
+        ax.set_ylim(0, max(annual_gens or [1.0]) * 1.22)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        plt.tight_layout()
         ann_gen_path = os.path.join(output_dir, "annual_generation_chart.png")
-        plt.savefig(ann_gen_path)
+        plt.savefig(ann_gen_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["annual_generation"] = ann_gen_path
 
         # 8. Monthly Generation Chart
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
+        all_mg_gens = []
         for idx, sy in enumerate(sorted_study_years):
             offset = (idx - (n_years - 1) / 2) * width
             gens = [monthly_kpis_by_year[sy].get(m_num, {}).get("generation_mwh", 0.0) for m_num in months_nums]
+            all_mg_gens.extend(gens)
             ax.bar(x + offset, gens, width=width, label=sy, color=colors_list[idx % len(colors_list)])
-        ax.set_title("Monthly Total Generation Comparison Across Years", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Monthly Total Generation Comparison Across Years", fontsize=11, fontweight="bold", pad=28)
         ax.set_xticks(x)
         ax.set_xticklabels(months_labels, fontsize=8)
         ax.set_ylabel("Generation (MWh)")
+        ax.set_ylim(0, max(all_mg_gens or [1.0]) * 1.25)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        ax.legend(loc="upper right", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         gen_path = os.path.join(output_dir, "generation_chart.png")
-        plt.savefig(gen_path)
+        plt.savefig(gen_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["generation"] = gen_path
 
         # 9. Monthly PR Trend Line (Regression trend across all months)
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
         chron_labels = []
         chron_prs = []
         for sy in sorted_study_years:
@@ -349,17 +390,16 @@ def generate_charts(
             slope, intercept = np.polyfit(x_chron, chron_prs, 1)
             trend_y = slope * x_chron + intercept
             ax.plot(x_chron, trend_y, color="#e53935", linestyle="--", linewidth=1.5, label="Trendline")
-        ax.set_title("Monthly Average Performance Ratio Trend", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Monthly Average Performance Ratio Trend", fontsize=11, fontweight="bold", pad=28)
         step = max(len(chron_labels) // 8, 1)
         ax.set_xticks(x_chron[::step])
         ax.set_xticklabels([chron_labels[i] for i in range(0, len(chron_labels), step)], rotation=20, ha="right", fontsize=8)
         ax.set_ylabel("PR (%)")
-        ax.set_ylim(0, 100)
+        ax.set_ylim(0, 105)
         ax.grid(axis="both", linestyle=":", alpha=0.4)
-        ax.legend(loc="lower left", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         trend_path = os.path.join(output_dir, "trend_chart.png")
-        plt.savefig(trend_path)
+        plt.savefig(trend_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["trend"] = trend_path
 
@@ -371,7 +411,7 @@ def generate_charts(
             losses_by_year[sy_label].append(m_loss)
 
         for sy in sorted_study_years:
-            fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+            fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
             sy_losses = losses_by_year[sy]
             sy_loss_map = {m.month: m for m in sy_losses}
             
@@ -403,20 +443,22 @@ def generate_charts(
                 width=0.5,
             )
             
-            ax.set_title(f"Monthly Loss Breakdown - {sy} (MWh)", fontsize=11, fontweight="bold", pad=10)
+            total_losses = [g + c + m for g, c, m in zip(grid_fail_mwh, curt_mwh, mach_mwh)]
+            ax.set_ylim(0, max(total_losses or [1.0]) * 1.25)
+            ax.set_title(f"Monthly Loss Breakdown - {sy} (MWh)", fontsize=11, fontweight="bold", pad=28)
             ax.set_xticks(x_loss)
             ax.set_xticklabels(months_labels, fontsize=8)
             ax.set_ylabel("Losses (MWh)")
             ax.grid(axis="y", linestyle=":", alpha=0.4)
-            ax.legend(loc="upper right", fontsize=8)
-            plt.tight_layout()
+            apply_top_legend(ax, ncol=3)
             loss_path = os.path.join(output_dir, f"loss_chart_{sy}.png")
-            plt.savefig(loss_path)
+            plt.savefig(loss_path, bbox_inches="tight")
             plt.close(fig)
             chart_paths[f"losses_{sy}"] = loss_path
 
         # 13. Inverter-level Loss Chart (Figure 6.3)
-        fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
+        all_inv_losses = []
         for idx, sy in enumerate(sorted_study_years):
             offset = (idx - (n_years - 1) / 2) * width_inv
             losses_val = [
@@ -427,16 +469,17 @@ def generate_charts(
                 ) / 1000.0
                 for inv in sorted_inverters
             ]
+            all_inv_losses.extend(losses_val)
             ax.bar(x_inv + offset, losses_val, width=width_inv, label=sy, color=colors_list[idx % len(colors_list)])
-        ax.set_title("Inverter-Level Annual Loss Comparison (MWh)", fontsize=11, fontweight="bold", pad=10)
+        ax.set_title("Inverter-Level Annual Loss Comparison (MWh)", fontsize=11, fontweight="bold", pad=28)
         ax.set_xticks(x_inv)
         ax.set_xticklabels(inv_names, rotation=20, ha="right", fontsize=8)
         ax.set_ylabel("Losses (MWh)")
+        ax.set_ylim(0, max(all_inv_losses or [1.0]) * 1.25)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-        ax.legend(loc="upper right", fontsize=8)
-        plt.tight_layout()
+        apply_top_legend(ax)
         inv_loss_path = os.path.join(output_dir, "inverter_loss_chart.png")
-        plt.savefig(inv_loss_path)
+        plt.savefig(inv_loss_path, bbox_inches="tight")
         plt.close(fig)
         chart_paths["losses_inv"] = inv_loss_path
 
@@ -481,6 +524,32 @@ def set_table_col_widths_and_padding(table, col_widths: List[float], top=80, bot
             set_cell_margins(cell, top, bottom, left, right)
 
 
+def add_docx_callout(doc, title: str, text: str, border_color: str = "1A5276", bg_color: str = "F8FAFC"):
+    """Render a stylized callout box with a colored left accent border in DOCX."""
+    t = doc.add_table(rows=1, cols=1)
+    cell = t.rows[0].cells[0]
+    set_cell_background(cell, bg_color)
+    set_cell_margins(cell, top=120, bottom=120, left=160, right=140)
+    tcPr = cell._tc.get_or_add_tcPr()
+    borders_xml = f'<w:tcBorders {nsdecls("w")}><w:left w:val="single" w:sz="24" w:space="0" w:color="{border_color}"/><w:top w:val="none"/><w:right w:val="none"/><w:bottom w:val="none"/></w:tcBorders>'
+    tcPr.append(parse_xml(borders_xml))
+    p = cell.paragraphs[0]
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(2)
+    r1 = p.add_run(f"{title}\n")
+    r1.font.name = "Arial"
+    r1.font.size = Pt(10)
+    r1.font.bold = True
+    r1.font.color.rgb = RGBColor(0x1A, 0x36, 0x5D)
+    r2 = p.add_run(text)
+    r2.font.name = "Arial"
+    r2.font.size = Pt(9.5)
+    r2.font.color.rgb = RGBColor(0x2D, 0x37, 0x48)
+    p_after = doc.add_paragraph()
+    p_after.paragraph_format.space_before = Pt(2)
+    p_after.paragraph_format.space_after = Pt(4)
+
+
 def generate_docx_report(
     plant: Plant,
     lifetime: any,
@@ -500,6 +569,7 @@ def generate_docx_report(
     charts: dict[str, str],
     file_path: str,
     daily_records: list,
+    settings: Optional[dict] = None,
 ) -> None:
     """Create the professional Word report (.docx) matching Example report outlines."""
     doc = Document()
@@ -582,14 +652,28 @@ def generate_docx_report(
         r.font.size = Pt(12)
         r.font.color.rgb = RGBColor(0x34, 0x49, 0x5E)  # Hex #34495E
 
-    # Other metadata paragraphs (Plant Capacity, Location, Commissioned, Prepared by, Date)
+    # Other metadata paragraphs (Plant Capacity, Location, Commissioned, Prepared by, License, Date)
+    auditor_name = (settings or {}).get("auditor_name", "").strip()
+    auditor_org = (settings or {}).get("organization", "").strip()
+    license_id = (settings or {}).get("license_id", "").strip()
+    if auditor_name and auditor_org:
+        prep_str = f"{auditor_name}, {auditor_org}"
+    elif auditor_org:
+        prep_str = auditor_org
+    elif auditor_name:
+        prep_str = auditor_name
+    else:
+        prep_str = "WindForce (Pvt) Ltd" if plant.name.lower() == "vydexa" else "SoliZer Intelligence Platform"
+
     meta_items = [
         ("Plant Capacity: ", f"DC: {plant.installed_dc_capacity_mw} MW | AC: {int(plant.installed_ac_capacity_mw) if plant.installed_ac_capacity_mw.is_integer() else plant.installed_ac_capacity_mw} MW"),
         ("Location: ", f"{plant.location.title()}, Northern Province, {'Sri Lanka' if plant.country.lower() in ('srilanka', 'sri lanka') else plant.country.title()}" if plant.location.lower() == "vavuniya" else f"{plant.location.title()}, {'Sri Lanka' if plant.country.lower() in ('srilanka', 'sri lanka') else plant.country.title()}"),
         ("Commissioned: ", plant.commission_date.strftime("%B %Y")),
-        ("Prepared by: ", "WindForce (Pvt) Ltd" if plant.name.lower() == "vydexa" else "SoliZer Intelligence Platform"),
-        ("Date: ", datetime.now().strftime("%B %Y"))
+        ("Prepared by: ", prep_str),
     ]
+    if license_id:
+        meta_items.append(("Auditor License: ", license_id))
+    meta_items.append(("Date: ", datetime.now().strftime("%B %Y")))
 
     for label, val in meta_items:
         p = doc.add_paragraph()
@@ -606,6 +690,103 @@ def generate_docx_report(
         r2.font.color.rgb = RGBColor(0x34, 0x49, 0x5E)
 
     doc.add_page_break()
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Page 2: Executive Summary & Performance KPI Deck
+    # ───────────────────────────────────────────────────────────────────────
+    include_exec = (settings or {}).get("report_include_exec_summary", "true").lower() == "true"
+    if include_exec:
+        h_exec = doc.add_heading(level=1)
+        h_exec_run = h_exec.add_run("Executive Performance Summary")
+        h_exec_run.font.name = "Arial"
+        h_exec_run.font.size = Pt(20)
+        h_exec_run.font.color.rgb = RGBColor(0x1A, 0x36, 0x5D)
+
+        p_exec_intro = doc.add_paragraph(
+            f"This executive briefing synthesizes key operational telemetry and degradation benchmarks for {plant.name.upper()} "
+            f"Solar Power Plant across the {len(sorted_study_years)}-year assessment period ({', '.join(sorted_study_years)}). "
+            f"Metrics are standardized in compliance with IEC 61724 PV monitoring criteria."
+        )
+        p_exec_intro.paragraph_format.space_after = Pt(14)
+
+        # 4 KPI Cards Deck
+        total_gen_mwh = lifetime.total_generation / 1000.0
+        pr_actual = kpis.performance_ratio
+        gamma_val = float((settings or {}).get("temp_coefficient", "-0.0040"))
+        pr_stc = calculate_temperature_corrected_pr(pr_actual, cell_temperature_c=35.0, temp_coefficient=gamma_val)
+        annual_deg = getattr(deg, "annual_degradation_rate", plant.annual_degradation_rate)
+        deg_status = "Optimal" if annual_deg <= plant.annual_degradation_rate + 0.1 else ("Moderate" if annual_deg <= 1.2 else "Degraded")
+
+        currency_sym = (settings or {}).get("currency_symbol", "$")
+        tariff = float((settings or {}).get("tariff_rate", "0.12"))
+        total_lost_kwh = (lifetime.grid_loss + lifetime.curtailment + lifetime.machine_loss)
+        revenue_lost = total_lost_kwh * tariff
+
+        # Create 2x2 cards table
+        kpi_table = doc.add_table(rows=2, cols=2)
+        kpi_cards = [
+            ("TOTAL GENERATION", f"{total_gen_mwh:,.1f} MWh", f"Possible: {lifetime.total_possible_generation/1000.0:,.1f} MWh", "1A365D"),
+            ("PERFORMANCE RATIO (PR)", f"{pr_actual:.2f}%", f"IEC 61724 PR_STC: {pr_stc:.2f}% (γ={gamma_val})", "2B6CB0"),
+            ("ANNUAL DEGRADATION", f"{annual_deg:.2f}% / yr", f"Health Status: {deg_status} (Target: {plant.annual_degradation_rate}%)", "2E7D32" if deg_status == "Optimal" else "DD6B20"),
+            ("UNREALIZED REVENUE LOSS", f"{currency_sym} {revenue_lost:,.2f}", f"Lost: {total_lost_kwh/1000.0:,.1f} MWh @ {currency_sym}{tariff}/kWh", "C53030"),
+        ]
+
+        card_idx = 0
+        for r in range(2):
+            for c in range(2):
+                cell = kpi_table.rows[r].cells[c]
+                title, val_str, sub_str, border_c = kpi_cards[card_idx]
+                card_idx += 1
+                set_cell_background(cell, "F8FAFC")
+                set_cell_margins(cell, top=140, bottom=140, left=180, right=140)
+                tcPr = cell._tc.get_or_add_tcPr()
+                borders_xml = f'<w:tcBorders {nsdecls("w")}><w:left w:val="single" w:sz="24" w:space="0" w:color="{border_c}"/><w:top w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/><w:right w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/></w:tcBorders>'
+                tcPr.append(parse_xml(borders_xml))
+                
+                p = cell.paragraphs[0]
+                p.paragraph_format.space_before = Pt(2)
+                p.paragraph_format.space_after = Pt(2)
+                p.paragraph_format.line_spacing = 1.15
+                
+                # Header
+                r_head = p.add_run(f"{title}\n")
+                r_head.font.name = "Arial"
+                r_head.font.size = Pt(8.5)
+                r_head.font.bold = True
+                r_head.font.color.rgb = RGBColor(0x71, 0x80, 0x96)
+                
+                # Main Value
+                r_val = p.add_run(f"{val_str}\n")
+                r_val.font.name = "Arial"
+                r_val.font.size = Pt(16)
+                r_val.font.bold = True
+                r_val.font.color.rgb = RGBColor(0x1A, 0x36, 0x5D)
+                
+                # Subtitle
+                r_sub = p.add_run(sub_str)
+                r_sub.font.name = "Arial"
+                r_sub.font.size = Pt(8.5)
+                r_sub.font.color.rgb = RGBColor(0x4A, 0x55, 0x68)
+
+        set_table_col_widths_and_padding(kpi_table, [3.25, 3.25], top=120, bottom=120, left=150, right=150)
+
+        # Executive Highlights Callout
+        p_sp = doc.add_paragraph()
+        p_sp.paragraph_format.space_before = Pt(12)
+        p_sp.paragraph_format.space_after = Pt(4)
+
+        add_docx_callout(
+            doc,
+            "EXECUTIVE AUDIT SUMMARY",
+            f"Plant generation across the study period totaled {total_gen_mwh:,.1f} MWh with a lifetime PR of {pr_actual:.2f}%. "
+            f"Under IEC 61724 temperature-normalization, the temperature-corrected PR is {pr_stc:.2f}%. "
+            f"Total lost generation is {total_lost_kwh/1000.0:,.1f} MWh, representing an estimated financial unrealized revenue of {currency_sym} {revenue_lost:,.2f}. "
+            f"The annual degradation rate of {annual_deg:.2f}% demonstrates {deg_status.lower()} operational aging relative to the {plant.annual_degradation_rate:.2f}% design specification.",
+            border_color="1A365D",
+            bg_color="F0F9FF",
+        )
+
+        doc.add_page_break()
 
     # ───────────────────────────────────────────────────────────────────────
     # Section 1. Plant-Level Performance Analysis
@@ -1272,12 +1453,15 @@ def generate_docx_report(
     diff_pct = (gen_last - gen_first) / gen_first * 100.0
     direction = "decreased" if diff_pct < 0 else "increased"
 
-    p_f1 = doc.add_paragraph(style="List Bullet")
-    p_f1.add_run(f"The plant generated a total of {lifetime.total_generation/1000.0:,.1f} MWh over the {len(sorted_study_years)}-year study period.")
-    p_f2 = doc.add_paragraph(style="List Bullet")
-    p_f2.add_run(f"Annual generation {direction} by {abs(diff_pct):.1f}% from {y_first} to {y_last} ({gen_first:,.1f} MWh to {gen_last:,.1f} MWh).")
-    p_f3 = doc.add_paragraph(style="List Bullet")
-    p_f3.add_run(f"The average annual Performance Ratio across the study period was {kpis.performance_ratio:.2f}%.")
+    add_docx_callout(
+        doc,
+        "PRODUCTION & EFFICIENCY AUDIT",
+        f"• Plant lifetime energy generated: {lifetime.total_generation/1000.0:,.1f} MWh across {len(sorted_study_years)} operational study years.\n"
+        f"• Annual generation {direction} by {abs(diff_pct):.1f}% from {y_first} to {y_last} ({gen_first:,.1f} MWh to {gen_last:,.1f} MWh).\n"
+        f"• Lifetime average Performance Ratio evaluated at {kpis.performance_ratio:.2f}%.",
+        border_color="1A5276",
+        bg_color="F8FAFC",
+    )
 
     # 7.2 Inverter Performance Findings
     doc.add_heading("7.2 Inverter Performance Findings", level=2)
@@ -1296,26 +1480,30 @@ def generate_docx_report(
             worst_inv_pr = pr_val
             worst_inv_name = inv.name
 
-    p_i1 = doc.add_paragraph(style="List Bullet")
-    p_i1.add_run(f"Best performing inverter in {y_last}: {format_inverter_name(best_inv_name)} with PR of {best_inv_pr:.2f}%.")
-    p_i2 = doc.add_paragraph(style="List Bullet")
-    p_i2.add_run(f"Lowest performing inverter in {y_last}: {format_inverter_name(worst_inv_name)} with PR of {worst_inv_pr:.2f}%.")
-    p_i3 = doc.add_paragraph(style="List Bullet")
-    p_i3.add_run(f"The PR variation among inverters is {best_inv_pr - worst_inv_pr:.2f} percentage points, indicating notable variation in performance across inverters.")
+    add_docx_callout(
+        doc,
+        "INVERTER DISCREPANCY & FLEET SPREAD",
+        f"• Top performer in {y_last}: {format_inverter_name(best_inv_name)} with PR of {best_inv_pr:.2f}%.\n"
+        f"• Lagging inverter in {y_last}: {format_inverter_name(worst_inv_name)} with PR of {worst_inv_pr:.2f}%.\n"
+        f"• PR disparity across fleet is {best_inv_pr - worst_inv_pr:.2f} percentage points, signaling potential string clipping, dust accumulation, or thermal throttling.",
+        border_color="2B6CB0",
+        bg_color="F8FAFC",
+    )
 
     # 7.3 Loss Findings
     doc.add_heading("7.3 Loss Findings", level=2)
     dominant = "Grid Losses" if lifetime.grid_loss > lifetime.machine_loss else "Machine Losses"
     loss_pct = ((lifetime.grid_loss + lifetime.machine_loss) / max(lifetime.total_possible_generation, 1.0)) * 100.0
 
-    p_l1 = doc.add_paragraph(style="List Bullet")
-    p_l1.add_run(f"Total Grid Losses over the study period: {lifetime.grid_loss/1000.0:,.1f} MWh.")
-    p_l2 = doc.add_paragraph(style="List Bullet")
-    p_l2.add_run(f"Total Machine Losses over the study period: {lifetime.machine_loss/1000.0:,.1f} MWh.")
-    p_l3 = doc.add_paragraph(style="List Bullet")
-    p_l3.add_run(f"{dominant} represent the dominant source of energy loss at the plant.")
-    p_l4 = doc.add_paragraph(style="List Bullet")
-    p_l4.add_run(f"Combined losses represent approximately {loss_pct:.2f}% of total possible generation.")
+    add_docx_callout(
+        doc,
+        "ENERGY LOSS BREAKDOWN",
+        f"• Total Grid Outage / Curtailment Losses: {lifetime.grid_loss/1000.0:,.1f} MWh.\n"
+        f"• Total Machine & Equipment Failures: {lifetime.machine_loss/1000.0:,.1f} MWh.\n"
+        f"• {dominant} constitute the prevailing root cause of lost generation at {loss_pct:.2f}% of total potential yield.",
+        border_color="DD6B20",
+        bg_color="FFFDF7",
+    )
 
     # 7.4 Irradiation Findings
     doc.add_heading("7.4 Irradiation Findings", level=2)
@@ -1324,8 +1512,13 @@ def generate_docx_report(
         recs = study_year_records[label]
         annual_irrads.append(sum(d.irradiation for d in recs) / 100.0)
 
-    p_ir1 = doc.add_paragraph(style="List Bullet")
-    p_ir1.add_run(f"Annual irradiation ranged from {min(annual_irrads):,.1f} to {max(annual_irrads):,.1f} kWh/m².")
+    add_docx_callout(
+        doc,
+        "SOLAR RESOURCE ASSESSMENT",
+        f"• Annual solar insolation observed between {min(annual_irrads):,.1f} and {max(annual_irrads):,.1f} kWh/m² across the site pyranometers.",
+        border_color="319795",
+        bg_color="F8FAFC",
+    )
 
     doc.add_page_break()
 
@@ -1341,50 +1534,83 @@ def generate_docx_report(
     # 8.1 Performance Improvement Recommendations
     doc.add_heading("8.1 Performance Improvement Recommendations", level=2)
     
-    p_rec1 = doc.add_paragraph()
-    p_rec1.add_run("Module Cleaning Program: ").bold = True
-    p_rec1.add_run(f"Implement a regular cleaning schedule for all PV modules, particularly during dry and dusty months. Soiling can significantly reduce power output, especially in the dry zone of {plant.location.title()}. A monthly or bi-weekly cleaning schedule is recommended.")
+    add_docx_callout(
+        doc,
+        "MODULE SOILING MITIGATION PROGRAM",
+        f"Implement an optimized, high-frequency washing cycle for PV arrays, particularly during dry and dust-heavy seasons. "
+        f"Soiling significantly attenuates irradiance transfer in the {plant.location.title()} climate zone. Bi-weekly morning washes recommended.",
+        border_color="2E7D32",
+        bg_color="F0FDF4",
+    )
 
-    p_rec2 = doc.add_paragraph()
-    p_rec2.add_run("Inverter Maintenance: ").bold = True
-    p_rec2.add_run(f"Focus maintenance attention on underperforming inverters, particularly {format_inverter_name(worst_inv_name)}. Conduct detailed inspection of DC input connections, string performance. Regular preventive maintenance should be scheduled quarterly.")
+    add_docx_callout(
+        doc,
+        "INVERTER TARGETED CORRECTIVE MAINTENANCE",
+        f"Prioritize inspection on underperforming inverters, especially {format_inverter_name(worst_inv_name)}. "
+        f"Execute DC array string health verification, thermal imaging of combiner boxes, and inverter internal cooling fan audits.",
+        border_color="2E7D32",
+        bg_color="F0FDF4",
+    )
 
-    p_rec3 = doc.add_paragraph()
-    p_rec3.add_run("Grid Loss Mitigation: ").bold = True
-    p_rec3.add_run(f"Coordinate with the utility ({plant.grid_operator}) to minimize grid-related outages. Consider installing power quality monitoring equipment to document and quantify grid-related losses. Explore options for grid stability improvements at the point of connection.")
+    add_docx_callout(
+        doc,
+        "GRID OUTAGE DOCUMENTATION & MITIGATION",
+        f"Liaise with grid operator ({plant.grid_operator}) to establish proactive curtailment schedules and log high-frequency voltage fluctuations.",
+        border_color="2E7D32",
+        bg_color="F0FDF4",
+    )
 
-    p_rec4 = doc.add_paragraph()
-    p_rec4.add_run("Vegetation Management: ").bold = True
-    p_rec4.add_run("Ensure proper vegetation management around the plant perimeter and between module rows to prevent shading losses. Schedule regular vegetation clearing, especially during monsoon seasons when growth rates are highest.")
+    add_docx_callout(
+        doc,
+        "VEGETATION & SHADING PREVENTION",
+        "Enforce strict vegetation perimeter trimming to prevent string-level shading during low-sun azimuth angles and rainy growth surges.",
+        border_color="2E7D32",
+        bg_color="F0FDF4",
+    )
 
     # 8.2 Monitoring Recommendations
     doc.add_heading("8.2 Monitoring Recommendations", level=2)
 
-    p_mon1 = doc.add_paragraph()
-    p_mon1.add_run("String-Level Monitoring: ").bold = True
-    p_mon1.add_run("Install string-level monitoring to identify underperforming strings and modules. This will enable targeted maintenance and early detection of module-level issues.")
+    add_docx_callout(
+        doc,
+        "HIGH-RESOLUTION STRING TELEMETRY",
+        "Introduce string-level current monitoring to quickly isolate open circuits, micro-cracks, and degraded bypass diodes before thermal damage occurs.",
+        border_color="2B6CB0",
+        bg_color="F8FAFC",
+    )
 
-    p_mon2 = doc.add_paragraph()
-    p_mon2.add_run("Weather Station Calibration: ").bold = True
-    p_mon2.add_run("Ensure the plant weather station and pyranometer are regularly calibrated (annually at minimum) to maintain data accuracy for performance analysis.")
-
-    p_mon3 = doc.add_paragraph()
-    p_mon3.add_run("Data Quality Improvement: ").bold = True
-    p_mon3.add_run("Implement automated data quality checks to identify and flag data anomalies. Ensure consistent data recording across all inverter blocks.")
+    add_docx_callout(
+        doc,
+        "METEOROLOGICAL SENSOR RE-CALIBRATION",
+        "Calibrate secondary standard pyranometers and ambient temperature sensors annually to maintain IEC 61724 Class A measurement fidelity.",
+        border_color="2B6CB0",
+        bg_color="F8FAFC",
+    )
 
     # 8.3 Long-Term Recommendations
     doc.add_heading("8.3 Long-Term Recommendations", level=2)
 
-    p_lt1 = doc.add_paragraph()
-    p_lt1.add_run("Degradation Monitoring: ").bold = True
-    p_lt1.add_run("Continue tracking the degradation rate annually. The current rate should be monitored to ensure it does not accelerate. Consider periodic I-V curve testing to validate module-level degradation.")
+    add_docx_callout(
+        doc,
+        "LONG-TERM DEGRADATION BENCHMARKING",
+        f"Continue annual degradation regression tracking against the manufacturer baseline rate ({plant.annual_degradation_rate}%/yr). "
+        "Perform selective electroluminescence (EL) and IV curve field tests if degradation slope exceeds the contractual tolerance.",
+        border_color="1A365D",
+        bg_color="F8FAFC",
+    )
 
-    p_lt2 = doc.add_paragraph()
-    p_lt2.add_run("Performance Benchmarking: ").bold = True
-    region = "Northern Province" if plant.name.lower() == "vydexa" else plant.country.title()
-    p_lt2.add_run(f"Compare plant performance against similar installations in the {region} to identify opportunities for improvement and validate that performance is within expected bounds.")
+    disclaimer = (settings or {}).get("report_disclaimer", "")
+    if disclaimer:
+        p_disc = doc.add_paragraph()
+        p_disc.paragraph_format.space_before = Pt(28)
+        p_disc.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        r_disc = p_disc.add_run(f"Regulatory Disclaimer: {disclaimer}")
+        r_disc.font.name = "Arial"
+        r_disc.font.size = Pt(8.5)
+        r_disc.font.italic = True
+        r_disc.font.color.rgb = RGBColor(0x71, 0x80, 0x96)
 
-    p_end = doc.add_paragraph("\n\nEnd of Report")
+    p_end = doc.add_paragraph("\nEnd of Report")
     p_end.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_end.runs[0].font.italic = True
 
@@ -1394,6 +1620,43 @@ def generate_docx_report(
 # ═══════════════════════════════════════════════════════════════════════
 # PDF Document Generation
 # ═══════════════════════════════════════════════════════════════════════
+def make_pdf_callout(title: str, text: str, border_color: str = "#1A5276", bg_color: str = "#F8FAFC", width=7.0*inch):
+    """Creates a stylized callout box Flowable with colored left border and shaded background."""
+    styles = getSampleStyleSheet()
+    t_style = ParagraphStyle(
+        name=f"PDFCalloutT_{abs(hash(title))}",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9.5,
+        leading=13,
+        textColor=colors.HexColor(border_color),
+        spaceAfter=3,
+    )
+    b_style = ParagraphStyle(
+        name=f"PDFCalloutB_{abs(hash(text[:20]))}",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor("#2D3748"),
+    )
+    cell_content = [
+        Paragraph(title, t_style),
+        Paragraph(text.replace("\n", "<br/>"), b_style),
+    ]
+    tbl = Table([[cell_content]], colWidths=[width])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg_color)),
+        ("LINEBEFORE", (0, 0), (-1, -1), 3.5, colors.HexColor(border_color)),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    return tbl
+
+
 def generate_pdf_report(
     plant: Plant,
     lifetime: any,
@@ -1413,6 +1676,7 @@ def generate_pdf_report(
     charts: dict[str, str],
     file_path: str,
     daily_records: list,
+    settings: Optional[dict] = None,
 ) -> None:
     """Create the professional PDF report using ReportLab Flowables matching Example report outlines."""
     doc = SimpleDocTemplate(
@@ -1642,21 +1906,119 @@ def generate_pdf_report(
     story.append(Spacer(1, 0.4 * inch))
     
     country_name = "Sri Lanka" if plant.country.lower() in ("srilanka", "sri lanka") else plant.country.title()
-    prepared_by = "WindForce (Pvt) Ltd" if plant.name.lower() == "vydexa" else "SoliZer Intelligence Platform"
-    
+    auditor_name = (settings or {}).get("auditor_name", "").strip()
+    auditor_org = (settings or {}).get("organization", "").strip()
+    license_id = (settings or {}).get("license_id", "").strip()
+    if auditor_name and auditor_org:
+        prep_str = f"{auditor_name}, {auditor_org}"
+    elif auditor_org:
+        prep_str = auditor_org
+    elif auditor_name:
+        prep_str = auditor_name
+    else:
+        prep_str = "WindForce (Pvt) Ltd" if plant.name.lower() == "vydexa" else "SoliZer Intelligence Platform"
+
     meta_items = [
         ("Plant Capacity: ", f"DC: {plant.installed_dc_capacity_mw} MW | AC: {int(plant.installed_ac_capacity_mw) if plant.installed_ac_capacity_mw.is_integer() else plant.installed_ac_capacity_mw} MW"),
         ("Location: ", f"{plant.location.title()}, Northern Province, {country_name}" if plant.location.lower() == "vavuniya" else f"{plant.location.title()}, {country_name}"),
         ("Commissioned: ", plant.commission_date.strftime("%B %Y")),
-        ("Prepared by: ", prepared_by),
-        ("Date: ", datetime.now().strftime("%B %Y"))
+        ("Prepared by: ", prep_str),
     ]
+    if license_id:
+        meta_items.append(("Auditor License: ", license_id))
+    meta_items.append(("Date: ", datetime.now().strftime("%B %Y")))
 
     for label, val in meta_items:
         meta_html = f"<b>{label}</b>{val}"
         story.append(Paragraph(meta_html, style_cover_meta))
         
     story.append(PageBreak())
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Page 2: Executive Summary & Performance KPI Deck
+    # ───────────────────────────────────────────────────────────────────────
+    include_exec = (settings or {}).get("report_include_exec_summary", "true").lower() == "true"
+    if include_exec:
+        story.append(Paragraph("Executive Performance Summary", style_h1))
+        story.append(
+            Paragraph(
+                f"This executive briefing synthesizes key operational telemetry and degradation benchmarks for {plant.name.upper()} "
+                f"Solar Power Plant across the {len(sorted_study_years)}-year assessment period ({', '.join(sorted_study_years)}). "
+                f"Metrics are standardized in compliance with IEC 61724 PV monitoring criteria.",
+                style_body,
+            )
+        )
+        story.append(Spacer(1, 10))
+
+        total_gen_mwh = lifetime.total_generation / 1000.0
+        pr_actual = kpis.performance_ratio
+        gamma_val = float((settings or {}).get("temp_coefficient", "-0.0040"))
+        pr_stc = calculate_temperature_corrected_pr(pr_actual, cell_temperature_c=35.0, temp_coefficient=gamma_val)
+        annual_deg = getattr(deg, "annual_degradation_rate", plant.annual_degradation_rate)
+        deg_status = "Optimal" if annual_deg <= plant.annual_degradation_rate + 0.1 else ("Moderate" if annual_deg <= 1.2 else "Degraded")
+
+        currency_sym = (settings or {}).get("currency_symbol", "$")
+        tariff = float((settings or {}).get("tariff_rate", "0.12"))
+        total_lost_kwh = (lifetime.grid_loss + lifetime.curtailment + lifetime.machine_loss)
+        revenue_lost = total_lost_kwh * tariff
+
+        def make_kpi_cell(title, val, sub):
+            t_p = Paragraph(f"<font color='#718096'><b>{title}</b></font>", ParagraphStyle(
+                name=f"kpi_t_{abs(hash(title))}",
+                parent=styles["Normal"],
+                fontName="Helvetica-Bold",
+                fontSize=8,
+                leading=10,
+                spaceAfter=3,
+            ))
+            v_p = Paragraph(f"<font color='#1A365D'><b>{val}</b></font>", ParagraphStyle(
+                name=f"kpi_v_{abs(hash(val))}",
+                parent=styles["Normal"],
+                fontName="Helvetica-Bold",
+                fontSize=14,
+                leading=18,
+                spaceAfter=3,
+            ))
+            s_p = Paragraph(f"<font color='#4A5568'>{sub}</font>", ParagraphStyle(
+                name=f"kpi_s_{abs(hash(sub[:15]))}",
+                parent=styles["Normal"],
+                fontName="Helvetica",
+                fontSize=8,
+                leading=10,
+            ))
+            return [t_p, v_p, s_p]
+
+        c1 = make_kpi_cell("TOTAL GENERATION", f"{total_gen_mwh:,.1f} MWh", f"Possible: {lifetime.total_possible_generation/1000.0:,.1f} MWh")
+        c2 = make_kpi_cell("PERFORMANCE RATIO (PR)", f"{pr_actual:.2f}%", f"IEC 61724 PR_STC: {pr_stc:.2f}% (γ={gamma_val})")
+        c3 = make_kpi_cell("ANNUAL DEGRADATION", f"{annual_deg:.2f}% / yr", f"Status: {deg_status} (Target: {plant.annual_degradation_rate}%)")
+        c4 = make_kpi_cell("UNREALIZED REVENUE LOSS", f"{currency_sym} {revenue_lost:,.2f}", f"Lost: {total_lost_kwh/1000.0:,.1f} MWh @ {currency_sym}{tariff}/kWh")
+
+        kpi_table_data = [
+            [c1, c2],
+            [c3, c4]
+        ]
+        kpi_t = Table(kpi_table_data, colWidths=[3.4 * inch, 3.4 * inch])
+        kpi_t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(kpi_t)
+        story.append(Spacer(1, 14))
+
+        exec_summary_text = (
+            f"Plant generation across the study period totaled {total_gen_mwh:,.1f} MWh with a lifetime PR of {pr_actual:.2f}%. "
+            f"Under IEC 61724 temperature-normalization, the temperature-corrected PR is {pr_stc:.2f}%. "
+            f"Total lost generation is {total_lost_kwh/1000.0:,.1f} MWh, representing an estimated financial unrealized revenue of {currency_sym} {revenue_lost:,.2f}. "
+            f"The annual degradation rate of {annual_deg:.2f}% demonstrates {deg_status.lower()} operational aging relative to the {plant.annual_degradation_rate:.2f}% design specification."
+        )
+        story.append(make_pdf_callout("EXECUTIVE AUDIT SUMMARY", exec_summary_text, border_color="#1A365D", bg_color="#F0F9FF", width=6.8 * inch))
+        story.append(PageBreak())
 
     # ───────────────────────────────────────────────────────────────────────
     # Section 1. Plant-Level Performance Analysis
@@ -2282,26 +2644,49 @@ def generate_pdf_report(
     story.append(Paragraph("7. Findings", style_h1))
     
     story.append(Paragraph("7.1 Key Performance Findings", style_h2))
-    story.append(Paragraph(f"• The plant generated a total of {lifetime.total_generation/1000.0:,.1f} MWh over the {len(sorted_study_years)}-year study period.", style_bullet))
-    story.append(Paragraph(f"• Annual generation {direction} by {abs(diff_pct):.1f}% from {y_first} to {y_last} ({gen_first:,.1f} MWh to {gen_last:,.1f} MWh).", style_bullet))
-    story.append(Paragraph(f"• The average annual Performance Ratio across the study period was {kpis.performance_ratio:.2f}%.", style_bullet))
+    story.append(make_pdf_callout(
+        "PRODUCTION & EFFICIENCY AUDIT",
+        f"• Plant lifetime energy generated: {lifetime.total_generation/1000.0:,.1f} MWh across {len(sorted_study_years)} operational study years.<br/>"
+        f"• Annual generation {direction} by {abs(diff_pct):.1f}% from {y_first} to {y_last} ({gen_first:,.1f} MWh to {gen_last:,.1f} MWh).<br/>"
+        f"• Lifetime average Performance Ratio evaluated at {kpis.performance_ratio:.2f}%.",
+        border_color="#1A5276",
+        bg_color="#F8FAFC",
+        width=6.8 * inch,
+    ))
 
     story.append(Spacer(1, 10))
     story.append(Paragraph("7.2 Inverter Performance Findings", style_h2))
-    story.append(Paragraph(f"• Best performing inverter in {y_last}: {format_inverter_name(best_inv_name)} with PR of {best_inv_pr:.2f}%.", style_bullet))
-    story.append(Paragraph(f"• Lowest performing inverter in {y_last}: {format_inverter_name(worst_inv_name)} with PR of {worst_inv_pr:.2f}%.", style_bullet))
-    story.append(Paragraph(f"• The PR variation among inverters is {best_inv_pr - worst_inv_pr:.2f} percentage points, indicating notable variation in performance across inverters.", style_bullet))
+    story.append(make_pdf_callout(
+        "INVERTER DISCREPANCY & FLEET SPREAD",
+        f"• Top performer in {y_last}: {format_inverter_name(best_inv_name)} with PR of {best_inv_pr:.2f}%.<br/>"
+        f"• Lagging inverter in {y_last}: {format_inverter_name(worst_inv_name)} with PR of {worst_inv_pr:.2f}%.<br/>"
+        f"• PR disparity across fleet is {best_inv_pr - worst_inv_pr:.2f} percentage points, signaling potential string clipping, dust accumulation, or thermal throttling.",
+        border_color="#2B6CB0",
+        bg_color="#F8FAFC",
+        width=6.8 * inch,
+    ))
 
     story.append(Spacer(1, 10))
     story.append(Paragraph("7.3 Loss Findings", style_h2))
-    story.append(Paragraph(f"• Total Grid Losses over the study period: {lifetime.grid_loss/1000.0:,.1f} MWh.", style_bullet))
-    story.append(Paragraph(f"• Total Machine Losses over the study period: {lifetime.machine_loss/1000.0:,.1f} MWh.", style_bullet))
-    story.append(Paragraph(f"• {dominant} represent the dominant source of energy loss at the plant.", style_bullet))
-    story.append(Paragraph(f"• Combined losses represent approximately {loss_pct:.2f}% of total possible generation.", style_bullet))
+    story.append(make_pdf_callout(
+        "ENERGY LOSS BREAKDOWN",
+        f"• Total Grid Outage / Curtailment Losses: {lifetime.grid_loss/1000.0:,.1f} MWh.<br/>"
+        f"• Total Machine & Equipment Failures: {lifetime.machine_loss/1000.0:,.1f} MWh.<br/>"
+        f"• {dominant} constitute the prevailing root cause of lost generation at {loss_pct:.2f}% of total potential yield.",
+        border_color="#DD6B20",
+        bg_color="#FFFDF7",
+        width=6.8 * inch,
+    ))
 
     story.append(Spacer(1, 10))
     story.append(Paragraph("7.4 Irradiation Findings", style_h2))
-    story.append(Paragraph(f"• Annual irradiation ranged from {min(annual_irrads):,.1f} to {max(annual_irrads):,.1f} kWh/m².", style_bullet))
+    story.append(make_pdf_callout(
+        "SOLAR RESOURCE ASSESSMENT",
+        f"• Annual solar insolation observed between {min(annual_irrads):,.1f} and {max(annual_irrads):,.1f} kWh/m² across the site pyranometers.",
+        border_color="#319795",
+        bg_color="#F8FAFC",
+        width=6.8 * inch,
+    ))
 
     story.append(PageBreak())
 
@@ -2311,23 +2696,80 @@ def generate_pdf_report(
     story.append(Paragraph("8. Recommendations", style_h1))
     
     story.append(Paragraph("8.1 Performance Improvement Recommendations", style_h2))
-    story.append(Paragraph(f"<b>Module Cleaning Program:</b> Implement a regular cleaning schedule for all PV modules, particularly during dry and dusty months. Soiling can significantly reduce power output, especially in the dry zone of {plant.location.title()}. A monthly or bi-weekly cleaning schedule is recommended.", style_body))
-    story.append(Paragraph(f"<b>Inverter Maintenance:</b> Focus maintenance attention on underperforming inverters, particularly {format_inverter_name(worst_inv_name)}. Conduct detailed inspection of DC input connections, string performance. Regular preventive maintenance should be scheduled quarterly.", style_body))
-    story.append(Paragraph(f"<b>Grid Loss Mitigation:</b> Coordinate with the utility ({plant.grid_operator}) to minimize grid-related outages. Consider installing power quality monitoring equipment to document and quantify grid-related losses. Explore options for grid stability improvements at the point of connection.", style_body))
-    story.append(Paragraph("<b>Vegetation Management:</b> Ensure proper vegetation management around the plant perimeter and between module rows to prevent shading losses. Schedule regular vegetation clearing, especially during monsoon seasons when growth rates are highest.", style_body))
+    story.append(make_pdf_callout(
+        "MODULE SOILING MITIGATION PROGRAM",
+        f"Implement an optimized, high-frequency washing cycle for PV arrays, particularly during dry and dust-heavy seasons. "
+        f"Soiling significantly attenuates irradiance transfer in the {plant.location.title()} climate zone. Bi-weekly morning washes recommended.",
+        border_color="#2E7D32",
+        bg_color="#F0FDF4",
+        width=6.8 * inch,
+    ))
+    story.append(Spacer(1, 6))
+    story.append(make_pdf_callout(
+        "INVERTER TARGETED CORRECTIVE MAINTENANCE",
+        f"Prioritize inspection on underperforming inverters, especially {format_inverter_name(worst_inv_name)}. "
+        f"Execute DC array string health verification, thermal imaging of combiner boxes, and inverter internal cooling fan audits.",
+        border_color="#2E7D32",
+        bg_color="#F0FDF4",
+        width=6.8 * inch,
+    ))
+    story.append(Spacer(1, 6))
+    story.append(make_pdf_callout(
+        "GRID OUTAGE DOCUMENTATION & MITIGATION",
+        f"Liaise with grid operator ({plant.grid_operator}) to establish proactive curtailment schedules and log high-frequency voltage fluctuations.",
+        border_color="#2E7D32",
+        bg_color="#F0FDF4",
+        width=6.8 * inch,
+    ))
+    story.append(Spacer(1, 6))
+    story.append(make_pdf_callout(
+        "VEGETATION & SHADING PREVENTION",
+        "Enforce strict vegetation perimeter trimming to prevent string-level shading during low-sun azimuth angles and rainy growth surges.",
+        border_color="#2E7D32",
+        bg_color="#F0FDF4",
+        width=6.8 * inch,
+    ))
 
     story.append(Spacer(1, 10))
     story.append(Paragraph("8.2 Monitoring Recommendations", style_h2))
-    story.append(Paragraph("<b>String-Level Monitoring:</b> Install string-level monitoring to identify underperforming strings and modules. This will enable targeted maintenance and early detection of module-level issues.", style_body))
-    story.append(Paragraph("<b>Weather Station Calibration:</b> Ensure the plant weather station and pyranometer are regularly calibrated (annually at minimum) to maintain data accuracy for performance analysis.", style_body))
-    story.append(Paragraph("<b>Data Quality Improvement:</b> Implement automated data quality checks to identify and flag data anomalies. Ensure consistent data recording across all inverter blocks.", style_body))
+    story.append(make_pdf_callout(
+        "HIGH-RESOLUTION STRING TELEMETRY",
+        "Introduce string-level current monitoring to quickly isolate open circuits, micro-cracks, and degraded bypass diodes before thermal damage occurs.",
+        border_color="#2B6CB0",
+        bg_color="#F8FAFC",
+        width=6.8 * inch,
+    ))
+    story.append(Spacer(1, 6))
+    story.append(make_pdf_callout(
+        "METEOROLOGICAL SENSOR RE-CALIBRATION",
+        "Calibrate secondary standard pyranometers and ambient temperature sensors annually to maintain IEC 61724 Class A measurement fidelity.",
+        border_color="#2B6CB0",
+        bg_color="#F8FAFC",
+        width=6.8 * inch,
+    ))
 
     story.append(Spacer(1, 10))
     story.append(Paragraph("8.3 Long-Term Recommendations", style_h2))
-    story.append(Paragraph("<b>Degradation Monitoring:</b> Continue tracking the degradation rate annually. The current rate should be monitored to ensure it does not accelerate. Consider periodic I-V curve testing to validate module-level degradation.", style_body))
-    
-    region = "Northern Province" if plant.name.lower() == "vydexa" else plant.country.title()
-    story.append(Paragraph(f"<b>Performance Benchmarking:</b> Compare plant performance against similar installations in the {region} to identify opportunities for improvement and validate that performance is within expected bounds.", style_body))
+    story.append(make_pdf_callout(
+        "LONG-TERM DEGRADATION BENCHMARKING",
+        f"Continue annual degradation regression tracking against the manufacturer baseline rate ({plant.annual_degradation_rate}%/yr). "
+        "Perform selective electroluminescence (EL) and IV curve field tests if degradation slope exceeds the contractual tolerance.",
+        border_color="#1A365D",
+        bg_color="#F8FAFC",
+        width=6.8 * inch,
+    ))
+
+    disclaimer = (settings or {}).get("report_disclaimer", "")
+    if disclaimer:
+        story.append(Spacer(1, 16))
+        story.append(Paragraph(f"<b>Regulatory Disclaimer:</b> <i>{disclaimer}</i>", ParagraphStyle(
+            name="PDFDisclaimer",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=8,
+            leading=11,
+            textColor=colors.HexColor("#718096"),
+        )))
 
     story.append(Spacer(1, 20))
     p_end = Paragraph("<i>End of Report</i>", style_cover_sp_val)
@@ -2471,6 +2913,9 @@ def generate_and_save_report(
     file_name = f"SoliZer_Report_{plant.name.replace(' ', '_')}_{timestamp}.{report_type}"
     file_path = os.path.join(reports_dir, file_name)
 
+    # Retrieve settings
+    settings = get_system_settings_dict(db)
+
     # Generate document
     if report_type == "docx":
         generate_docx_report(
@@ -2492,6 +2937,7 @@ def generate_and_save_report(
             charts=charts,
             file_path=file_path,
             daily_records=daily_records,
+            settings=settings,
         )
     elif report_type == "pdf":
         generate_pdf_report(
@@ -2513,6 +2959,7 @@ def generate_and_save_report(
             charts=charts,
             file_path=file_path,
             daily_records=daily_records,
+            settings=settings,
         )
     else:
         raise ValueError(f"Unsupported report type: {report_type}")

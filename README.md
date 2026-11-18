@@ -12,6 +12,16 @@
 
 ---
 
+## 📥 Quick Download & Installation (Windows)
+
+The desktop application is packaged as a standalone Windows installer with zero external dependencies (no Python, Node.js, or database installation required).
+
+1. Download the latest installer from the **[Releases](../../releases)** tab (or direct installer link).
+2. Double-click **`Solizer_Setup.exe`** and follow the installation wizard.
+3. Launch **Solize** directly from the created Desktop shortcut or Windows Start Menu.
+
+---
+
 ## 🌟 Key Features
 
 ### 1. IEC 61724 Standard KPI Engine
@@ -40,12 +50,23 @@ $$
 * **Live Progress Indicator**: Multi-stage visual feedback during data parsing, mathematical verification, and database persistence.
 * **Manual Daily Operations Modal**: Operators can log daily generation, solar radiation, and downtime events directly from the UI without needing spreadsheet imports.
 
-### 5. Automated Engineering Dossiers & Custom Branding
-* **Dual Output Formats**: Compiles comprehensive 8-section technical dossiers in both **Word (.docx)** and **PDF** formats.
-* **Cover Page Branding**: Operators can upload their company or client logo, automatically resized and embedded on cover pages.
-* Sections include: Executive Summary, Plant Performance, Inverter-level Discrepancies, Loss Breakdowns, Degradation Regression, and Maintenance Recommendations.
+### 5. Unified Settings Hub & Multi-Currency Economics
+* **Auditor Profile Management**: Configurable auditor name, engineering accreditation, and license ID automatically stamped onto PDF and DOCX cover pages.
+* **Multi-Currency Support**: Switch seamlessly between **USD ($)**, **EUR (€)**, **LKR (Rs.)**, **GBP (£)**, **INR (₹)**, and **AUD (A$)** with dynamic tariff rate calculations.
+* **Module & Threshold Controls**: Customize sidebar module visibility, IEC 61724 temperature coefficients ($\gamma$), STC reference cell temperatures, and PR alert tolerances.
+* **1-Click Database Optimization & Backup**: One-click SQLite `VACUUM` & reindexing, cache purges, and instant `.db` backup exports.
 
-### 6. Modern Desktop UI & Packaging
+### 6. Data Safety & Mistake Correction
+* **Manage & Delete Mistyped Logs**: Dedicated log manager to inspect, audit, and permanently delete mistakenly entered or duplicate daily records.
+* **Dossier Archive Management**: Permanently delete outdated or test reports from both the SQLite database and local disk with confirmation prompts.
+
+### 7. Automated Engineering Dossiers & Custom Branding
+* **Dual Output Formats**: Compiles comprehensive 8-section technical dossiers in both **Word (.docx)** and **PDF** formats.
+* **Page 2 Executive Summary 4-KPI Deck**: High-impact cards for Total Generation (MWh), Actual vs. IEC $PR_{STC}$, Annual Degradation with health status, and Monetized Revenue Loss.
+* **Collision-Free Visual Charts**: All 13 Matplotlib figures feature top-centered horizontal legends with padded layout, eliminating chart overlap.
+* **Cover Page Branding**: Operators can upload their company or client logo, automatically resized and embedded on cover pages.
+
+### 8. Modern Desktop UI & Packaging
 * **Adaptive Light / Dark Modes**: Material UI v5 design with high-contrast data visualization, custom SVG charts via Recharts, and sleek status badges.
 * **Standalone Windows Distribution**: Packaged via PyInstaller and Inno Setup 6 into a single `.exe` installer with a custom solar icon (`solizer.ico`).
 

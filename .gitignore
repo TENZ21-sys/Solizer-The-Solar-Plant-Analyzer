@@ -45,6 +45,8 @@ backend/build/
 backend/dist/
 Output/
 Output2/
+dist_installer/
+installer_build/
 Installer/*.exe
 *.exe
 
